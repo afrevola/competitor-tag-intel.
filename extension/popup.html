@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>Tag Inspector</h1>
+    <span id="page"></span>
+    <button id="refresh" title="Re-read the page (use after clicking through the site)">↻ Refresh</button>
+  </header>
+
+  <div id="status" hidden></div>
+  <nav id="views"></nav>
+
+  <section id="main" hidden>
+    <div id="summary"></div>
+    <div id="toolbar"></div>
+    <div id="list"></div>
+  </section>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

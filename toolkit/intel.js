@@ -1,0 +1,370 @@
+#!/usr/bin/env node
+// Tag Intel CLI: turns browser captures into per-site reports and multi-site comparisons.
+//
+//   node intel.js extract  <part files...> [-o capture.json] [--expect domain]   reassemble a packed capture
+//   node intel.js analyze  <capture.json> [-o outdir]             report.json + report.md for one site
+//   node intel.js compare  <report.json ...> [-o outdir]          comparison.md / .csv / .html across sites
+//   node intel.js recording <recording-file ...> [-o outdir]      analyze a funnel recording (recorder-dump.js output)
+import fs from 'fs';
+import path from 'path';
+import { parseContainer } from './lib/parser.js';
+import { buildConversionMap } from './lib/conversions.js';
+import { extractAccountIds, siteBrand, adLibraryLinks } from './lib/ids.js';
+import { buildMediaMix } from './lib/mediamix.js';
+import { analyzeServerSide } from './lib/sst.js';
+import { analyzePromos } from './lib/promos.js';
+import { analyzeCost } from './lib/cost.js';
+import { analyzeRecording, recordingCsv } from './lib/recording.js';
+
+const [cmd, ...rest] = process.argv.slice(2);
+const opt = (name, dflt) => { const i = rest.indexOf(name); if (i < 0) return dflt; const v = rest[i + 1]; rest.splice(i, 2); return v; };
+const die = (m) => { console.error(m); process.exit(1); };
+
+// ---------- extract ----------
+import zlib from 'zlib';
+function readToolText(file) {
+  const raw = fs.readFileSync(file, 'utf8');
+  try { const j = JSON.parse(raw); const arr = Array.isArray(j) ? j : [j]; const t = arr.map((x) => (x && typeof x.text === 'string' ? x.text : '')).join('\n'); if (t) return t; } catch {}
+  return raw;
+}
+// Reassemble a packed capture from one or more saved tool outputs (parts can be in any order)
+function extractPacked(files, tag, expect = null) {
+  // Group parts by capture ID so parts from different captures (or tabs) can never be mixed
+  const caps = {};
+  const re = new RegExp('__' + tag + '_PART_(\\d+)_OF_(\\d+)(?:_ID_([A-Za-z0-9]+)_HOST_([^_\\s]*))?__([A-Za-z0-9+/=]+)__' + tag + '_PART_END__', 'g');
+  for (const f of files) {
+    const t = readToolText(f);
+    for (const m of t.matchAll(re)) {
+      const id = m[3] || 'legacy';
+      const c = (caps[id] ||= { host: m[4] || null, total: +m[2], parts: {}, files: new Set() });
+      c.parts[+m[1]] = m[5];
+      c.files.add(f);
+    }
+  }
+  let ids = Object.keys(caps);
+  if (!ids.length) return { error: 'no parts found' };
+  const norm = (h) => String(h || '').replace(/^www\./, '');
+  if (expect) {
+    const wrong = ids.filter((id) => caps[id].host && !norm(caps[id].host).endsWith(norm(expect)));
+    ids = ids.filter((id) => !wrong.includes(id));
+    if (!ids.length) return { error: `these files hold a capture of ${wrong.map((id) => caps[id].host).join(', ')}, not ${expect}. The tab was showing a different site: open a new tab, check location.host, and capture again.` };
+  }
+  const complete = ids.filter((id) => Object.keys(caps[id].parts).length === caps[id].total);
+  if (!complete.length) {
+    const c = caps[ids[0]];
+    const missing = [...Array(c.total).keys()].filter((i) => !(i in c.parts));
+    return { error: `missing part(s) ${missing.join(', ')} of ${c.total}${c.host ? ' (capture of ' + c.host + ')' : ''}. In the same browser tab run __tiPart(${missing[0]})${missing.length > 1 ? ' … __tiPart(' + missing[missing.length - 1] + ')' : ''} and pass every saved file to extract.` };
+  }
+  if (complete.length > 1) console.error(`note: ${complete.length} complete captures in these files; using the last one (${caps[complete[complete.length - 1]].host || 'unknown host'}).`);
+  const c = caps[complete[complete.length - 1]];
+  const buf = Buffer.from([...Array(c.total).keys()].map((i) => c.parts[i]).join(''), 'base64');
+  const data = JSON.parse(zlib.gunzipSync(buf).toString('utf8'));
+  if (expect && data.page?.host && !norm(data.page.host).endsWith(norm(expect)) && !norm(data.url || '').includes(norm(expect))) return { error: `capture is of ${data.page.host}, not ${expect}` };
+  return { data };
+}
+function extractMarked(file, begin, end) {
+  const raw = fs.readFileSync(file, 'utf8');
+  const candidates = [raw];
+  // Tool results are often saved as [{type, text}] where text is a JSON-encoded string
+  try {
+    const j = JSON.parse(raw);
+    const arr = Array.isArray(j) ? j : [j];
+    for (const x of arr) if (x && typeof x.text === 'string') candidates.unshift(x.text);
+  } catch {}
+  for (let t of candidates) {
+    for (let pass = 0; pass < 3; pass++) {
+      const a = t.indexOf(begin), b = t.lastIndexOf(end);
+      if (a >= 0 && b > a) {
+        const inner = t.slice(a + begin.length, b);
+        try { return JSON.parse(inner); } catch {}
+        try { return JSON.parse(JSON.parse('"' + inner + '"')); } catch {}
+      }
+      // Unwrap one level of JSON string encoding and try again
+      const s = t.trim().replace(/\n\n\(captured at origin[\s\S]*$/, '').replace(/\n\nTab Context:[\s\S]*$/, '');
+      try { const u = JSON.parse(s); if (typeof u === 'string') { t = u; continue; } } catch {}
+      break;
+    }
+  }
+  return null;
+}
+
+// ---------- analyze ----------
+function dataLayerSummary(page) {
+  const out = [];
+  for (const L of page.dataLayers || []) {
+    if (L.kind !== 'array') { out.push({ name: L.name, kind: 'object', keys: Object.keys(L.snapshot || {}).slice(0, 30) }); continue; }
+    const ev = {};
+    for (const e of L.entries || []) {
+      const name = e && typeof e === 'object' ? (e.event || (Array.isArray(e.gtag) ? 'gtag:' + e.gtag[0] : null)) : null;
+      if (!name) continue;
+      const x = (ev[name] ||= { count: 0, keys: new Set() });
+      x.count++;
+      Object.keys(e).forEach((k) => k !== 'event' && k !== 'gtm.uniqueEventId' && x.keys.add(k));
+    }
+    out.push({ name: L.name, kind: 'array', pushes: (L.entries || []).length, events: Object.entries(ev).map(([n, x]) => ({ event: n, count: x.count, keys: [...x.keys].slice(0, 25) })) });
+  }
+  return out;
+}
+
+function analyze(cap) {
+  const page = cap.page;
+  const gtm = [];
+  const containerSummary = [];
+  for (const [id, text] of Object.entries(cap.containers || {})) {
+    if (!text) { containerSummary.push({ id, error: 'not downloaded' }); continue; }
+    try {
+      const data = parseContainer(text);
+      gtm.push({ id, data });
+      const active = data.tags.filter((t) => t.category === 'tag' && !t.paused);
+      containerSummary.push({
+        id, version: data.version, activeTags: active.length, pausedTags: data.tags.filter((t) => t.paused).length,
+        triggers: data.triggers.length, variables: data.variables.length,
+        tagTypes: Object.entries(active.reduce((m, t) => ((m[t.type] = (m[t.type] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]).slice(0, 15),
+      });
+    } catch (e) { containerSummary.push({ id, error: e.message }); }
+  }
+  const launch = page.launch || null;
+  const conversions = buildConversionMap({ gtm, launch });
+  const accountIds = extractAccountIds({ page, gtm, launch });
+  const mediaMix = buildMediaMix({ page, gtm, launch });
+  const serverSide = analyzeServerSide(page, gtm, launch);
+  const promos = cap.promos && !cap.promos.error ? analyzePromos(cap.promos, new Date(cap.capturedAt)) : null;
+  const cost = analyzeCost(page);
+  const { domain, brand } = siteBrand(page.host);
+  const libraries = adLibraryLinks({ domain, brand }, accountIds.map((p) => p.platform).concat(mediaMix.channels.flatMap((c) => c.vendors.map((v) => v.name))));
+  if (cost) delete cost.fmt;
+  return {
+    site: domain, url: page.url, host: page.host, capturedAt: cap.capturedAt,
+    tagManagers: [...new Set([...(gtm.length ? ['Google Tag Manager'] : []), ...(launch ? ['Adobe Launch'] : [])])],
+    containers: containerSummary,
+    googleTags: page.containers.filter((c) => !/^GTM-/.test(c.id)).map((c) => c.id),
+    launch: launch ? { property: launch.property, built: launch.buildInfo?.buildDate || null, rules: launch.rules.length, dataElements: launch.dataElements.length, extensions: launch.extensions.map((e) => e.name) } : null,
+    mediaMix, accountIds, adLibraries: libraries,
+    conversions: {
+      active: conversions.filter((r) => !r.paused).length,
+      flagged: conversions.filter((r) => r.flags.some((f) => f[0] === 'bad' || f[0] === 'warn')).length,
+      byPlatform: Object.entries(conversions.filter((r) => !r.paused).reduce((m, r) => ((m[r.platform] = (m[r.platform] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]),
+      rows: conversions.map((r) => ({ platform: r.platform, account: r.account, event: r.event, value: r.valueText, currency: r.currency || null, firesOn: r.firing, source: `${r.container} ${r.tag}`, paused: r.paused, flags: r.flags.map((f) => f[1]) })),
+    },
+    serverSide: serverSide.filter((f) => f.verdict === 'yes' || f.verdict === 'likely'),
+    dataLayers: dataLayerSummary(page),
+    consent: { cookiesAtLoad: page.network.cookies || [] },
+    promos, cost,
+  };
+}
+
+// ---------- markdown ----------
+const md = {
+  table(head, rows) {
+    const esc = (v) => String(v ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+    return `| ${head.join(' | ')} |\n| ${head.map(() => '---').join(' | ')} |\n` + rows.map((r) => `| ${r.map(esc).join(' | ')} |`).join('\n') + '\n';
+  },
+};
+const kb = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round((b || 0) / 1024) + ' KB');
+
+function reportMd(R) {
+  let s = `# ${R.site}: marketing & tag intel\n\nCaptured ${R.capturedAt} from ${R.url}\n\n`;
+  s += `## Snapshot\n\n` + md.table(['', ''], [
+    ['Tag management', R.tagManagers.join(', ') || 'none found'],
+    ['Containers', R.containers.map((c) => c.error ? `${c.id} (${c.error})` : `${c.id} v${c.version}: ${c.activeTags} active tags, ${c.pausedTags} paused`).join('; ') || '—'],
+    ['Adobe Launch', R.launch ? `${R.launch.property}, ${R.launch.rules} rules, built ${String(R.launch.built || '').slice(0, 10)}` : '—'],
+    ['Marketing vendors', `${R.mediaMix.total} across ${R.mediaMix.channels.length} channels`],
+    ['Read', R.mediaMix.notes.join('; ') || '—'],
+    ['Agency signals', R.mediaMix.agencies.map((a) => a.name).join(', ') || 'none'],
+    ['Conversion tags', `${R.conversions.active} active, ${R.conversions.flagged} flagged`],
+    ['Server-side signals', R.serverSide.map((f) => f.signal).join('; ') || 'none detected'],
+    ['Promos', R.promos ? `${R.promos.offers.filter((o) => o.status === 'active').length} active, ${R.promos.offers.filter((o) => o.status === 'upcoming').length} upcoming; fiscal tags: ${R.promos.fiscalPeriods.join(', ') || '—'}` : 'not scanned'],
+    ['Tracking cost', R.cost ? `${R.cost.shares.marketingRequests}% of requests, ${kb(R.cost.totals.marketing.jsBytes)} of tracking JavaScript${R.cost.shares.marketingJs != null ? ` (${R.cost.shares.marketingJs}% of all JS)` : ''}` : '—'],
+  ]);
+  s += `\n## Media mix\n\n` + md.table(['Channel', 'Vendors'], R.mediaMix.channels.map((c) => [c.channel, c.vendors.map((v) => v.name).join(', ')]));
+  if (R.mediaMix.agencies.length) s += `\n**Agency signals**\n\n` + R.mediaMix.agencies.map((a) => `- **${a.name}**: ${a.evidence[0]}`).join('\n') + '\n';
+  s += `\n## Ad accounts & pixel IDs\n\n` + md.table(['Platform', 'IDs'], R.accountIds.map((p) => [p.platform, p.ids.map((i) => i.id).join(', ')]));
+  s += `\nAd libraries: ` + R.adLibraries.map((l) => `[${l.name}](${l.url})`).join(' · ') + '\n';
+  s += `\n## Conversions\n\n` + md.table(['Platform', 'Active tags'], R.conversions.byPlatform);
+  const flagged = R.conversions.rows.filter((r) => r.flags.length && !r.paused).slice(0, 30);
+  if (flagged.length) s += `\n**Flagged**\n\n` + md.table(['Platform', 'Event', 'Value sent', 'Flags', 'Source'], flagged.map((r) => [r.platform, r.event.slice(0, 60), String(r.value).slice(0, 50), r.flags.join('; '), r.source]));
+  if (R.serverSide.length) s += `\n## Server-side / first-party tracking\n\n` + R.serverSide.map((f) => `- **${f.signal}** (${f.verdict}): ${f.detail}${f.evidence[0] ? ` — e.g. \`${f.evidence[0].slice(0, 120)}\`` : ''}`).join('\n') + '\n';
+  if (R.promos) {
+    const P = R.promos;
+    s += `\n## Promos & campaigns\n\nRead ${P.pagesRead} promo pages (${P.candidates} candidates; sitemap has ${P.sitemapUrlCount} URLs).\n\n`;
+    if (P.offers.length) s += md.table(['Offer', 'Status', 'Dates', 'Prices', 'Restriction', 'URL'], P.offers.map((o) => [o.name, o.status, o.start || o.end ? `${o.start || '…'} → ${o.end || '…'}` : '', [...o.prices, ...o.percentOff].join(' '), o.restriction || '', o.url]));
+    if (P.campaignFolders.length) s += `\n**Campaign asset folders**\n\n` + md.table(['Folder', 'Tokens', 'Files'], P.campaignFolders.slice(0, 15).map((f) => [f.folder, f.tokens.join(', '), `${f.fileCount}: ${f.files.slice(0, 3).join(', ')}`]));
+    if (P.recent.length) s += `\n**Recently updated pages (sitemap)**\n\n` + P.recent.slice(0, 12).map((r) => `- ${r.lastmod.slice(0, 10)} ${r.url}`).join('\n') + '\n';
+  }
+  if (R.cost) {
+    const C = R.cost;
+    s += `\n## Third-party cost (this page load)\n\n` + md.table(['Bucket', 'Requests', 'Transferred', 'JavaScript'], [
+      ['First-party', C.totals.first.requests, kb(C.totals.first.bytes), kb(C.totals.first.jsBytes)],
+      ['Marketing & tag managers', C.totals.marketing.requests, kb(C.totals.marketing.bytes), kb(C.totals.marketing.jsBytes)],
+      ['Other third-party (CDN, fonts, maps, payments)', C.totals.infra.requests, kb(C.totals.infra.bytes), kb(C.totals.infra.jsBytes)],
+      ['Unclassified third-party', C.totals.other3p.requests, kb(C.totals.other3p.bytes), kb(C.totals.other3p.jsBytes)],
+    ]);
+    s += `\nTop vendors by weight: ` + C.vendors.slice(0, 8).map((v) => `${v.vendor} ${kb(v.bytes)} (${v.requests} req)`).join(', ') + '\n';
+    if (C.timing) s += `\nTiming: first byte ${C.timing.ttfb} ms, DOM ready ${C.timing.dcl} ms, load ${C.timing.load} ms.\n`;
+    if (C.note) s += `\n_${C.note}_\n`;
+  }
+  const dl = R.dataLayers.filter((l) => l.kind === 'array');
+  if (dl.length) s += `\n## Data layer at page load\n\n` + dl.map((l) => `- \`${l.name}\`: ${l.pushes} pushes; events: ${l.events.map((e) => e.event).slice(0, 20).join(', ') || '—'}`).join('\n') + '\n';
+  s += `\n## Containers\n\n` + R.containers.map((c) => c.error ? `- ${c.id}: ${c.error}` : `- **${c.id}** v${c.version}: ${c.activeTags} active / ${c.pausedTags} paused tags, ${c.triggers} trigger rules, ${c.variables} variables. Top types: ${c.tagTypes.slice(0, 6).map(([t, n]) => `${t} ×${n}`).join(', ')}`).join('\n') + '\n';
+  return s;
+}
+
+// ---------- compare ----------
+function compareRows(reports) {
+  const has = (R, ch) => (R.mediaMix.channels.find((c) => c.channel === ch)?.vendors || []).map((v) => v.name);
+  const ids = (R, p) => (R.accountIds.find((x) => x.platform === p)?.ids || []).map((i) => i.id);
+  return [
+    ['Tag management', (R) => R.tagManagers.join(' + ') || '—'],
+    ['Active tags (GTM)', (R) => R.containers.reduce((s, c) => s + (c.activeTags || 0), 0) || '—'],
+    ['Adobe Launch rules', (R) => R.launch?.rules ?? '—'],
+    ['Marketing vendors', (R) => R.mediaMix.total],
+    ['Search', (R) => has(R, 'Search').join(', ') || '—'],
+    ['Social', (R) => has(R, 'Social').join(', ') || '—'],
+    ['Programmatic', (R) => has(R, 'Programmatic').join(', ') || '—'],
+    ['CTV / TV', (R) => has(R, 'CTV / TV').join(', ') || '—'],
+    ['Retargeting', (R) => has(R, 'Retargeting').join(', ') || '—'],
+    ['Affiliate & partners', (R) => has(R, 'Affiliate & Partners').join(', ') || '—'],
+    ['Attribution', (R) => has(R, 'Attribution').join(', ') || '—'],
+    ['CDP & data', (R) => has(R, 'CDP & Data').join(', ') || '—'],
+    ['Email & CRM', (R) => has(R, 'Email & CRM').join(', ') || '—'],
+    ['Testing & personalization', (R) => has(R, 'Testing & Personalization').join(', ') || '—'],
+    ['Agency signals', (R) => R.mediaMix.agencies.map((a) => a.name.split(' (')[0]).join(', ') || '—'],
+    ['Google Ads accounts', (R) => ids(R, 'Google Ads').length || '—'],
+    ['Floodlight advertisers', (R) => ids(R, 'Floodlight / CM360').length || '—'],
+    ['GA4 properties', (R) => ids(R, 'GA4').length || '—'],
+    ['Meta pixels', (R) => ids(R, 'Meta Pixel').length || '—'],
+    ['Conversion tags (active / flagged)', (R) => `${R.conversions.active} / ${R.conversions.flagged}`],
+    ['Server-side signals', (R) => R.serverSide.map((f) => f.signal).join('; ') || '—'],
+    ['Active promos', (R) => R.promos ? R.promos.offers.filter((o) => o.status === 'active').map((o) => o.name).join('; ') || 'none dated' : 'not scanned'],
+    ['Upcoming promos', (R) => R.promos ? R.promos.offers.filter((o) => o.status === 'upcoming').map((o) => o.name).join('; ') || '—' : '—'],
+    ['Fiscal / campaign tags', (R) => R.promos ? [...R.promos.fiscalPeriods, ...R.promos.phases].join(', ') || '—' : '—'],
+    ['Tracking share of requests', (R) => (R.cost ? R.cost.shares.marketingRequests + '%' : '—')],
+    ['Tracking JavaScript', (R) => (R.cost ? `${kb(R.cost.totals.marketing.jsBytes)}${R.cost.shares.marketingJs != null ? ` (${R.cost.shares.marketingJs}%)` : ''}` : '—')],
+    ['Page load (ms)', (R) => R.cost?.timing?.load || '—'],
+  ];
+}
+
+function compareOut(reports, dir) {
+  const rows = compareRows(reports);
+  const head = ['', ...reports.map((R) => R.site)];
+  const body = rows.map(([label, f]) => [label, ...reports.map((R) => f(R))]);
+  // Vendor presence matrix
+  const vendorSet = new Map();
+  reports.forEach((R, i) => R.mediaMix.channels.forEach((c) => c.vendors.forEach((v) => {
+    if (!vendorSet.has(v.name)) vendorSet.set(v.name, { channel: c.channel, on: new Set() });
+    vendorSet.get(v.name).on.add(i);
+  })));
+  const matrix = [...vendorSet.entries()].sort((a, b) => a[1].channel.localeCompare(b[1].channel) || b[1].on.size - a[1].on.size || a[0].localeCompare(b[0]))
+    .map(([name, x]) => [x.channel, name, ...reports.map((_, i) => (x.on.has(i) ? '●' : ''))]);
+
+  // Account IDs that appear on more than one site (shared owner, agency or account)
+  const idSites = new Map();
+  reports.forEach((R) => R.accountIds.forEach((p) => p.ids.forEach((i) => {
+    if (p.platform === 'Google Tag Manager') return;
+    const k = p.platform + '|' + i.id;
+    if (!idSites.has(k)) idSites.set(k, new Set());
+    idSites.get(k).add(R.site);
+  })));
+  const shared = [...idSites.entries()].filter(([, s]) => s.size > 1).map(([k, s]) => [...k.split('|'), [...s].join(', ')]);
+
+  let m = `# Competitor tag & marketing comparison\n\n${reports.length} sites, captured ${[...new Set(reports.map((R) => R.capturedAt.slice(0, 10)))].join(', ')}\n\n`;
+  m += md.table(head, body);
+  if (shared.length) m += `\n## Shared account IDs\n\nThe same ad account or pixel on more than one site usually means a common owner, agency or buying account.\n\n` + md.table(['Platform', 'ID', 'Sites'], shared);
+  m += `\n## Vendor matrix\n\n` + md.table(['Channel', 'Vendor', ...reports.map((R) => R.site)], matrix);
+  fs.writeFileSync(path.join(dir, 'comparison.md'), m);
+
+  const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  fs.writeFileSync(path.join(dir, 'comparison.csv'), [head, ...body].map((r) => r.map(cell).join(',')).join('\n') + '\n\n' + [['Channel', 'Vendor', ...reports.map((R) => R.site)], ...matrix].map((r) => r.map(cell).join(',')).join('\n'));
+  fs.writeFileSync(path.join(dir, 'comparison.html'), compareHtml(reports, head, body, matrix, shared));
+}
+
+function compareHtml(reports, head, body, matrix, shared = []) {
+  const e = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const tbl = (h, rows, cls = '') => `<div class="scroll"><table class="${cls}"><thead><tr>${h.map((x) => `<th>${e(x)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((x, i) => (i === 0 ? `<th scope="row">${e(x)}</th>` : `<td>${e(x)}</td>`)).join('')}</tr>`).join('')}</tbody></table></div>`;
+  const siteSections = reports.map((R) => {
+    const P = R.promos;
+    const flagged = R.conversions.rows.filter((r) => r.flags.length && !r.paused).slice(0, 12);
+    return `<section class="site"><h2>${e(R.site)}</h2><p class="muted">${e(R.url)} · captured ${e(R.capturedAt.slice(0, 16).replace('T', ' '))}</p>
+      <p>${e(R.mediaMix.notes.join(' · ') || '')}</p>
+      <h3>Ad accounts</h3>${tbl(['Platform', 'IDs'], R.accountIds.map((p) => [p.platform, p.ids.map((i) => i.id).join(', ')]))}
+      <p class="links">${R.adLibraries.map((l) => `<a href="${e(l.url)}" target="_blank" rel="noopener">${e(l.name)}</a>`).join(' · ')}</p>
+      ${flagged.length ? `<h3>Flagged conversions</h3>${tbl(['Platform', 'Event', 'Value', 'Flags'], flagged.map((r) => [r.platform, r.event.slice(0, 50), String(r.value).slice(0, 40), r.flags.join('; ')]))}` : ''}
+      ${P && P.offers.length ? `<h3>Promos</h3>${tbl(['Offer', 'Status', 'Dates', 'Prices'], P.offers.slice(0, 15).map((o) => [o.name, o.status, o.start || o.end ? `${o.start || '…'} → ${o.end || '…'}` : '', [...o.prices, ...o.percentOff].join(' ')]))}` : ''}
+      ${P && P.campaignFolders.length ? `<h3>Campaign folders</h3><ul>${P.campaignFolders.slice(0, 8).map((f) => `<li><code>${e(f.folder)}</code> <span class="muted">${e(f.files.slice(0, 2).join(', '))}</span></li>`).join('')}</ul>` : ''}
+    </section>`;
+  }).join('');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Competitor Tag Comparison</title>
+<style>
+:root{--bg:#fbfbfa;--fg:#1d1f22;--muted:#626a73;--line:#e2e4e8;--card:#fff;--accent:#2457c5;--dot:#2457c5}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#15171a;--fg:#e7e9ec;--muted:#9aa2ab;--line:#2c3036;--card:#1d2024;--accent:#8db0ff;--dot:#8db0ff}}
+:root[data-theme="dark"]{--bg:#15171a;--fg:#e7e9ec;--muted:#9aa2ab;--line:#2c3036;--card:#1d2024;--accent:#8db0ff;--dot:#8db0ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:1200px;margin:0 auto;padding:32px 16px 64px}h1{font-size:28px;margin:0 0 4px;letter-spacing:-.01em}h2{font-size:20px;margin:40px 0 4px}h3{font-size:14px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:24px 0 8px}
+.muted{color:var(--muted)}.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}thead th{position:sticky;top:0;background:var(--card);font-weight:600}
+tbody th{font-weight:600;white-space:nowrap;color:var(--muted)}tr:last-child td,tr:last-child th{border-bottom:0}
+.matrix td{text-align:center;color:var(--dot);font-size:16px}.matrix td:nth-child(2){text-align:left;color:var(--fg);font-size:13px}
+.site{border-top:1px solid var(--line);margin-top:40px}a{color:var(--accent)}code{font-size:12px}ul{padding-left:18px}
+</style></head><body><main>
+<h1>Competitor tag &amp; marketing comparison</h1><p class="muted">${reports.length} sites · captured ${e([...new Set(reports.map((R) => R.capturedAt.slice(0, 10)))].join(', '))} · built from public tag containers, page data and sitemaps</p>
+<h2>Side by side</h2>${tbl(head, body)}
+${shared.length ? `<h2>Shared account IDs</h2><p class="muted">The same ad account or pixel on more than one site usually means a common owner, agency or buying account.</p>${tbl(['Platform', 'ID', 'Sites'], shared)}` : ''}
+<h2>Vendor matrix</h2>${tbl(['Channel', 'Vendor', ...reports.map((R) => R.site)], matrix, 'matrix')}
+${siteSections}
+</main></body></html>`;
+}
+
+// ---------- main ----------
+if (cmd === 'extract') {
+  const out = opt('-o', null) || 'capture.json';
+  const expect = opt('--expect', null);
+  if (!rest.length) die('usage: extract <tool-output-file> [more part files ...] [-o capture.json] [--expect domain.com]');
+  const r = extractPacked(rest, 'TAGINTEL', expect);
+  let cap = r.data;
+  if (!cap) cap = extractMarked(rest[0], '__TAGINTEL_BEGIN__', '__TAGINTEL_END__');
+  if (!cap) die('No capture found: ' + r.error);
+  fs.writeFileSync(out, JSON.stringify(cap));
+  console.log(`extracted ${cap.page.host}: ${cap.page.containers.length} tag IDs, ${Object.keys(cap.containers).length} GTM containers, promos: ${cap.promos ? (cap.promos.pages || []).length + ' pages' : 'no'} -> ${out}`);
+} else if (cmd === 'analyze') {
+  const out = opt('-o', null);
+  const file = rest[0] || die('usage: analyze <capture.json> [-o outdir]');
+  const cap = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const R = analyze(cap);
+  const dir = out || path.join('out', R.site);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'report.json'), JSON.stringify(R, null, 1));
+  fs.writeFileSync(path.join(dir, 'report.md'), reportMd(R));
+  console.log(`${R.site}: ${R.mediaMix.total} vendors, ${R.accountIds.reduce((s, p) => s + p.ids.length, 0)} IDs, ${R.conversions.active} conversion tags (${R.conversions.flagged} flagged), promos: ${R.promos ? R.promos.offers.length : 'n/a'} -> ${dir}/report.md`);
+} else if (cmd === 'compare') {
+  const out = opt('-o', null) || 'out/comparison';
+  if (!rest.length) die('usage: compare <report.json ...> [-o outdir]');
+  const reports = rest.map((f) => JSON.parse(fs.readFileSync(f, 'utf8')));
+  fs.mkdirSync(out, { recursive: true });
+  compareOut(reports, out);
+  console.log(`compared ${reports.length} sites -> ${out}/comparison.{md,csv,html}`);
+} else if (cmd === 'recording') {
+  const out = opt('-o', null) || 'out/recording';
+  if (!rest.length) die('usage: recording <recorder-output-file ...> [-o outdir]');
+  const items = [];
+  // Each page load's recording is packed separately; group files by which recording they belong to
+  for (const f of rest) {
+    const r = extractPacked([f], 'TAGINTELREC');
+    if (r.data) { items.push(...r.data.items); continue; }
+    if (/missing part/.test(r.error)) die(f + ': ' + r.error);
+    const old = extractMarked(f, '__TAGINTEL_REC_BEGIN__', '__TAGINTEL_REC_END__');
+    if (!old) die('No recording found in ' + f);
+    items.push(...old.items);
+  }
+  items.sort((a, b) => a.t - b.t);
+  const A = analyzeRecording({ started: items[0]?.t, items });
+  fs.mkdirSync(out, { recursive: true });
+  fs.writeFileSync(path.join(out, 'recording.csv'), recordingCsv(A));
+  let s = `# Funnel recording\n\n${items.length} items, ${A.timeline.filter((r) => r.type === 'page').length} pages\n\n## Things to check\n\n${A.anomalies.map((a) => '- ' + a.text).join('\n') || '- none'}\n\n## Funnel (site events in order)\n\n`;
+  s += A.funnel.map((f, i) => `${i + 1}. ${f.label}${f.values.length ? ' — ' + f.values.map(([k, v]) => `${k.split('.').pop()}=${v}`).join(', ') : ''}`).join('\n');
+  s += `\n\n## Pixels by platform\n\n` + md.table(['Platform', 'Accounts', 'Events (count, values)'], Object.entries(A.platforms).map(([v, p]) => [v, [...p.accounts].join(', '), Object.entries(p.events).map(([e, x]) => `${e} ×${x.count}${x.values.size ? ' [' + [...x.values].join('|') + ']' : ''}`).join('; ')]));
+  fs.writeFileSync(path.join(out, 'recording.md'), s);
+  console.log(`recording: ${items.length} items -> ${out}/recording.{md,csv}`);
+} else {
+  console.log(fs.readFileSync(new URL(import.meta.url), 'utf8').split('\n').slice(1, 8).join('\n'));
+}

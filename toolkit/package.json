@@ -1,0 +1,2 @@
+{ "name": "tag-intel", "version": "1.0.0", "type": "module", "private": true,
+  "description": "Headless competitive ad-ops intel toolkit (shares its analysis code with the Tag Inspector Chrome extension)." }
