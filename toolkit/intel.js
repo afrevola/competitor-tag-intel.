@@ -18,6 +18,8 @@ import { analyzeServerSide } from './lib/sst.js';
 import { analyzePromos } from './lib/promos.js';
 import { analyzeCost } from './lib/cost.js';
 import { analyzeShopify } from './lib/shopify.js';
+import { analyzeOptimization, summarizeFlags } from './lib/optimize.js';
+import { extractPricing } from './lib/pricing.js';
 import { analyzeRecording, recordingCsv } from './lib/recording.js';
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -136,6 +138,9 @@ function analyze(cap) {
   const promos = cap.promos && !cap.promos.error ? analyzePromos(cap.promos, new Date(cap.capturedAt)) : null;
   const cost = analyzeCost(page);
   const shopify = analyzeShopify(page);
+  const optimization = analyzeOptimization(conversions, gtm);
+  const flagSummary = summarizeFlags(conversions);
+  const pricing = cap.promos?.pages ? extractPricing(cap.promos.pages) : [];
   const { domain, brand } = siteBrand(page.host);
   const libraries = adLibraryLinks({ domain, brand }, accountIds.map((p) => p.platform).concat(mediaMix.channels.flatMap((c) => c.vendors.map((v) => v.name))));
   if (cost) delete cost.fmt;
@@ -143,6 +148,8 @@ function analyze(cap) {
     site: domain, url: page.url, host: page.host, capturedAt: cap.capturedAt,
     tagManagers: [...new Set([...(gtm.length ? ['Google Tag Manager'] : []), ...(launch ? ['Adobe Launch'] : []), ...(shopify?.pixels.length ? ['Shopify customer events (app pixels)'] : [])])],
     shopify,
+    optimization,
+    pricing,
     containers: containerSummary,
     googleTags: page.containers.filter((c) => !/^GTM-/.test(c.id)).map((c) => c.id),
     launch: launch ? { property: launch.property, built: launch.buildInfo?.buildDate || null, rules: launch.rules.length, dataElements: launch.dataElements.length, extensions: launch.extensions.map((e) => e.name) } : null,
@@ -150,6 +157,7 @@ function analyze(cap) {
     conversions: {
       active: conversions.filter((r) => !r.paused).length,
       flagged: conversions.filter((r) => r.flags.some((f) => f[0] === 'bad' || f[0] === 'warn')).length,
+      flagSummary,
       byPlatform: Object.entries(conversions.filter((r) => !r.paused).reduce((m, r) => ((m[r.platform] = (m[r.platform] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]),
       rows: conversions.map((r) => ({ platform: r.platform, account: r.account, event: r.event, value: r.valueText, currency: r.currency || null, firesOn: r.firing, source: `${r.container} ${r.tag}`, paused: r.paused, flags: r.flags.map((f) => f[1]) })),
     },
@@ -178,6 +186,8 @@ function reportMd(R) {
     ['Marketing vendors', `${R.mediaMix.total} across ${R.mediaMix.channels.length} channels`],
     ['Read', R.mediaMix.notes.join('; ') || '—'],
     ['Agency signals', R.mediaMix.agencies.map((a) => a.name).join(', ') || 'none'],
+    ['Optimizes to', R.optimization?.headline || '—'],
+    ['Pricing', R.pricing?.length ? R.pricing.slice(0, 2).map((pg) => pg.tiers.slice(0, 5).map((t) => `${t.name} ${t.price}${t.unit ? '/' + t.unit.replace(/ \/ /g, '/') : ''}`).join(', ')).join(' · ') : 'no pricing page read'],
     ['Conversion tags', `${R.conversions.active} active, ${R.conversions.flagged} flagged`],
     ['Server-side signals', R.serverSide.map((f) => f.signal).join('; ') || 'none detected'],
     ['Promos', R.promos ? `${R.promos.offers.filter((o) => o.status === 'active').length} active, ${R.promos.offers.filter((o) => o.status === 'upcoming').length} upcoming; fiscal tags: ${R.promos.fiscalPeriods.join(', ') || '—'}` : 'not scanned'],
@@ -188,8 +198,23 @@ function reportMd(R) {
   if (R.mediaMix.agencies.length) s += `\n**Agency signals**\n\n` + R.mediaMix.agencies.map((a) => `- **${a.name}**: ${a.evidence[0]}`).join('\n') + '\n';
   s += `\n## Ad accounts & pixel IDs\n\n` + md.table(['Platform', 'IDs'], R.accountIds.map((p) => [p.platform, p.ids.map((i) => i.id).join(', ')]));
   s += `\nAd libraries: ` + R.adLibraries.map((l) => `[${l.name}](${l.url})`).join(' · ') + '\n';
+  if (R.optimization?.platforms?.length) {
+    const O = R.optimization;
+    s += `\n## What they optimize to\n\n**${O.headline.charAt(0).toUpperCase() + O.headline.slice(1)}.**\n\n`;
+    s += md.table(['Platform', 'Main goal', 'All goals (count, with value)', 'Values sent', 'Who counts'], O.platforms.map((p) => [
+      p.platform + (p.accounts.length ? ` (${p.accounts.slice(0, 3).join(', ')}${p.accounts.length > 3 ? ', …' : ''})` : ''),
+      p.mainGoal,
+      p.goals.map((g) => `${g.goal}: ${g.count}${g.withValue ? ` (${g.withValue} valued)` : ''}`).join('; '),
+      p.values.join(', ') || 'none',
+      p.filters.join('; ') || 'everyone',
+    ]));
+    if (O.helpers.length) s += `\n**Custom code behind these conversions**\n\n` + O.helpers.map((h) => `- \`${h.variable}\` (${h.container}, used by ${h.usedBy.join(', ')}): ${h.meaning || 'see code'}. \`${h.code.slice(0, 160)}\``).join('\n') + '\n';
+  }
   s += `\n## Conversions\n\n` + md.table(['Platform', 'Active tags'], R.conversions.byPlatform);
-  const flagged = R.conversions.rows.filter((r) => r.flags.length && !r.paused).slice(0, 30);
+  if (R.conversions.flagSummary?.length) s += `\n**Flags at a glance**\n\n` + R.conversions.flagSummary.slice(0, 12).map(([f, n]) => `- ${n} × ${f}`).join('\n') + '\n';
+  const flaggedAll = R.conversions.rows.filter((r) => r.flags.length && !r.paused);
+  const flagged = flaggedAll.slice(0, 40);
+  if (flaggedAll.length > flagged.length) s += `\n_Showing ${flagged.length} of ${flaggedAll.length} flagged conversions; all are in report.json._\n`;
   if (flagged.length) s += `\n**Flagged**\n\n` + md.table(['Platform', 'Event', 'Value sent', 'Flags', 'Source'], flagged.map((r) => [r.platform, r.event.slice(0, 60), String(r.value).slice(0, 50), r.flags.join('; '), r.source]));
   if (R.shopify) {
     const Sh = R.shopify;
@@ -202,6 +227,15 @@ function reportMd(R) {
   if (R.serverSide.length) s += `\n## Server-side / first-party tracking\n\n` + R.serverSide.map((f) => `- **${f.signal}** (${f.verdict}): ${f.detail}${f.evidence[0] ? ` — e.g. \`${f.evidence[0].slice(0, 120)}\`` : ''}`).join('\n') + '\n';
   if (R.promos) {
     const P = R.promos;
+    if (R.pricing?.length) {
+      s += `\n## Pricing\n\n`;
+      for (const pg of R.pricing) {
+        s += `**${pg.title || pg.url}** (${pg.url})\n\n` + md.table(['Plan / option', 'Price', 'Per'], pg.tiers.map((t) => [t.name, t.price, t.unit || '—']));
+        if (pg.alsoOn?.length) pg.notes.push(`same table on ${pg.alsoOn.length} more page${pg.alsoOn.length > 1 ? 's' : ''}`);
+        if (pg.notes.length) s += `\n_${pg.notes.join(' · ')}_\n`;
+        s += '\n';
+      }
+    }
     s += `\n## Promos & campaigns\n\nRead ${P.pagesRead} promo pages (${P.candidates} candidates; sitemap has ${P.sitemapUrlCount} URLs).\n\n`;
     if (P.sitewidePrices?.length) s += `_Left out of the table: ${P.sitewidePrices.join(', ')} ${P.sitewidePrices.length > 1 ? 'appear' : 'appears'} on most pages read (site-wide text such as a free-shipping threshold, or standard prices)._\n\n`;
     if (P.offers.length) s += md.table(['Offer', 'Status', 'Dates', 'Prices', 'Restriction', 'URL'], P.offers.map((o) => [o.name + (o.copies > 1 ? ` (×${o.copies}${o.variants ? ': ' + o.variants.slice(0, 6).join(', ') + (o.variants.length > 6 ? ', …' : '') : ''})` : ''), o.status, o.start || o.end ? `${o.start || '…'} → ${o.end || '…'}` : '', [...o.prices, ...o.percentOff].join(' '), o.restriction || '', o.url]));

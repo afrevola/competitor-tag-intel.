@@ -359,7 +359,7 @@ await (async () => {
       description: meta('meta[name="description"]') || meta('meta[property="og:description"]'),
       h1: [...doc.querySelectorAll('h1')].map((h) => h.textContent.trim()).filter(Boolean).slice(0, 3),
       h2: [...doc.querySelectorAll('h2,h3')].map((h) => h.textContent.trim()).filter(Boolean).slice(0, 10),
-      text: text.slice(0, 6000),
+      text: text.slice(0, /pricing|plans?\b|membership|tickets?|pass(es)?\b|rates?\b/i.test(finalUrl) ? 15000 : 6000),
     };
   };
 

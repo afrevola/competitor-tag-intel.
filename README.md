@@ -4,6 +4,8 @@ Competitive ad-ops and marketing intel from any public website, in any industry 
 
 - **Media mix:** about 190 vendors grouped by channel: search, social, programmatic, CTV, retargeting, affiliate and referral, attribution, CDP, email/SMS/push, analytics, testing, session replay, reviews, B2B intent and ABM, chat, payments and buy-now-pay-later, ad monetization, tag managers, site platform and consent. Plus agency fingerprints, with cookie-sync partners kept separate.
 - **Ad accounts and pixel IDs:** Google Ads, Floodlight, GA4, Meta, TikTok, Snap, LinkedIn, Microsoft, Reddit, Pinterest, AdRoll, The Trade Desk and others, with links to each platform's public ad library.
+- **What they optimize to:** for each ad platform, the main conversion goal (purchase, booking, lead, sign-up…), every other goal, whether values are sent, and the filters on who counts (company size, campaign, page, site), plus a plain-English reading of the custom code those conversions rely on (holdout splits, campaign detection).
+- **Pricing:** plan, tier, pass and ticket tables from pricing, plans, membership and ticket pages, with billing notes (annual discount, free trial, group discounts).
 - **Conversion map:** what each ad platform is told counts as a conversion and the value sent. Flags duplicates, fixed values, missing values, values scraped from page text, and page visits counted as conversions.
 - **Shopify stores:** reads the pixels and conversions set up inside Shopify (Google & YouTube, Meta, TikTok, AppLovin, affiliate and other app pixels), which never appear in a tag manager, plus the store's theme and installed theme apps.
 - **Server-side tracking:** server GTM containers, first-party collection endpoints, Conversions API and enhanced-conversions signals.

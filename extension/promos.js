@@ -59,7 +59,7 @@ function cleanName(p) {
   return String(raw).split(/\s+[|–—-]\s+/)[0].trim().slice(0, 80);
 }
 
-const PRICE = /(?:US\$|C\$|A\$|[$£€¥₹])\s?\d{1,3}(?:[,.]\d{3})*(?:[.,]\d{2})?(?!\d)(?:\s?\/\s?(?:mo|month|yr|year|night|person|user|seat))?|\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?\s?(?:€|EUR|GBP|USD)\b/g;
+const PRICE = /(?:US\$|C\$|A\$|[$£€¥₹])\s?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2})?(?!\d)(?:\s?\/\s?(?:mo|month|yr|year|night|person|user|seat))?|\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?\s?(?:€|EUR|GBP|USD)\b/g;
 function shingles(text, drop = []) {
   let words = String(text || '').toLowerCase().replace(/[^a-z0-9$%]+/g, ' ').split(' ').filter(Boolean);
   if (drop.length) words = words.filter((w) => !drop.includes(w));
