@@ -9,6 +9,7 @@ Competitive ad-ops and marketing intel from any public website, read from what t
 - **Promo calendar:** offers from the site's promo pages, with dates, prices and status, plus campaign asset folders.
 - **Tracking cost:** requests, bytes and JavaScript added by marketing tags compared with the site itself.
 - **Comparison across competitors:** a side-by-side table, a vendor matrix, and account IDs shared between sites.
+- **Saved pulls you can come back to:** each pull is kept by date in a place you choose (a folder on your computer, a private GitHub repo, or nowhere). Later sessions answer questions from saved pulls and show what changed between them.
 
 The repo has three parts:
 
@@ -41,6 +42,8 @@ Node 18+ is required.
 node toolkit/intel.js extract part0.txt part1.txt -o capture.json --expect example.com
 node toolkit/intel.js analyze capture.json -o out/example.com
 node toolkit/intel.js compare out/*/report.json -o out/comparison
+node toolkit/intel.js store capture.json --root ~/competitor-intel     # dated pull + index + changes since last pull
+node toolkit/intel.js diff old/report.json new/report.json             # what changed between two pulls
 ```
 
 After editing anything in `toolkit/lib/`, run `node toolkit/build.js` to rebuild the in-page scripts.

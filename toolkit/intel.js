@@ -5,6 +5,9 @@
 //   node intel.js analyze  <capture.json> [-o outdir]             report.json + report.md for one site
 //   node intel.js compare  <report.json ...> [-o outdir]          comparison.md / .csv / .html across sites
 //   node intel.js recording <recording-file ...> [-o outdir]      analyze a funnel recording (recorder-dump.js output)
+//   node intel.js store    <capture.json[.gz]> --root <dir> [--date YYYY-MM-DD]   save a dated pull + update the index
+//   node intel.js index    --root <dir>                           rebuild index.json / INDEX.md from saved pulls
+//   node intel.js diff     <old report.json> <new report.json> [-o changes.md]   what changed between two pulls
 import fs from 'fs';
 import path from 'path';
 import { parseContainer } from './lib/parser.js';
@@ -19,6 +22,7 @@ import { analyzeRecording, recordingCsv } from './lib/recording.js';
 const [cmd, ...rest] = process.argv.slice(2);
 const opt = (name, dflt) => { const i = rest.indexOf(name); if (i < 0) return dflt; const v = rest[i + 1]; rest.splice(i, 2); return v; };
 const die = (m) => { console.error(m); process.exit(1); };
+const readJson = (f) => { const b = fs.readFileSync(f); return JSON.parse(/\.gz$/.test(f) || (b[0] === 0x1f && b[1] === 0x8b) ? zlib.gunzipSync(b).toString('utf8') : b.toString('utf8')); };
 
 // ---------- extract ----------
 import zlib from 'zlib';
@@ -315,6 +319,92 @@ ${siteSections}
 </main></body></html>`;
 }
 
+
+// ---------- store / index / diff ----------
+function pullSummary(R, rel, date) {
+  const ids = R.accountIds.reduce((s, p) => s + p.ids.length, 0);
+  const offers = R.promos ? R.promos.offers : [];
+  return {
+    site: R.site, date, path: rel, capturedAt: R.capturedAt,
+    tagManagers: R.tagManagers, containers: R.containers.map((c) => c.id + (c.version ? ' v' + c.version : '')),
+    vendors: R.mediaMix.total, accountIds: ids,
+    conversions: R.conversions.active, flagged: R.conversions.flagged,
+    serverSide: R.serverSide.filter((x) => x.verdict === 'yes').length,
+    offers: offers.length, activeOffers: offers.filter((o) => /active|upcoming/.test(o.status)).length,
+    marketingRequests: R.cost?.totals?.marketing?.requests ?? null,
+  };
+}
+function writeIndex(root, entries) {
+  entries.sort((a, b) => a.site.localeCompare(b.site) || b.date.localeCompare(a.date));
+  fs.writeFileSync(path.join(root, 'index.json'), JSON.stringify({ updated: new Date().toISOString(), pulls: entries }, null, 1));
+  let s = `# Competitor tag intel: saved pulls\n\nUpdated ${new Date().toISOString().slice(0, 10)}. Each pull is in \`pulls/<site>/<date>/\` (report.md, report.json, capture.json.gz). Comparisons are in \`comparisons/\`.\n\n`;
+  s += md.table(['Site', 'Date', 'Containers', 'Vendors', 'Account IDs', 'Conversions (flagged)', 'Server-side signals', 'Offers (active/upcoming)', 'Marketing requests', 'Report'],
+    entries.map((e) => [e.site, e.date, e.containers.join(', ') || '—', e.vendors, e.accountIds, `${e.conversions} (${e.flagged})`, e.serverSide, `${e.offers} (${e.activeOffers})`, e.marketingRequests ?? '—', `[report](${e.path}/report.md)`]));
+  fs.writeFileSync(path.join(root, 'INDEX.md'), s + '\n');
+}
+function loadIndex(root) {
+  try { return readJson(path.join(root, 'index.json')).pulls || []; } catch { return []; }
+}
+function storePull(capFile, root, date) {
+  const cap = readJson(capFile);
+  const R = analyze(cap);
+  date = date || (R.capturedAt || new Date().toISOString()).slice(0, 10);
+  let rel = `pulls/${R.site}/${date}`, n = 2;
+  while (fs.existsSync(path.join(root, rel, 'report.json'))) rel = `pulls/${R.site}/${date}-${n++}`;
+  const dir = path.join(root, rel);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'capture.json.gz'), zlib.gzipSync(JSON.stringify(cap)));
+  fs.writeFileSync(path.join(dir, 'report.json'), JSON.stringify(R, null, 1));
+  fs.writeFileSync(path.join(dir, 'report.md'), reportMd(R));
+  const entries = loadIndex(root).filter((e) => e.path !== rel);
+  const prev = entries.filter((e) => e.site === R.site).sort((a, b) => b.date.localeCompare(a.date))[0] || null;
+  entries.push(pullSummary(R, rel, rel.split('/').pop()));
+  writeIndex(root, entries);
+  return { R, rel, prev, files: ['capture.json.gz', 'report.json', 'report.md'].map((f) => rel + '/' + f).concat(['index.json', 'INDEX.md']) };
+}
+function rebuildIndex(root) {
+  const entries = [];
+  const base = path.join(root, 'pulls');
+  for (const site of fs.existsSync(base) ? fs.readdirSync(base) : []) {
+    for (const d of fs.readdirSync(path.join(base, site))) {
+      const f = path.join(base, site, d, 'report.json');
+      if (fs.existsSync(f)) entries.push(pullSummary(readJson(f), `pulls/${site}/${d}`, d));
+    }
+  }
+  writeIndex(root, entries);
+  return entries.length;
+}
+function diffReports(A, B) {
+  const setDiff = (a, b) => ({ added: [...b].filter((x) => !a.has(x)), removed: [...a].filter((x) => !b.has(x)) });
+  const vendors = (R) => new Set(R.mediaMix.channels.flatMap((c) => c.vendors.map((v) => `${v.name} (${c.channel})`)));
+  const ids = (R) => new Set(R.accountIds.flatMap((p) => p.ids.map((i) => `${p.platform} ${i.id}`)));
+  const convs = (R) => new Set(R.conversions.rows.filter((r) => !r.paused).map((r) => `${r.platform} ${r.account || ''} · ${r.event} · value ${r.value ?? '—'}`));
+  const sst = (R) => new Set(R.serverSide.filter((x) => x.verdict === 'yes').map((x) => x.signal));
+  const offers = (R) => new Map((R.promos?.offers || []).map((o) => [o.name, `${o.status}${o.start || o.end ? ` (${o.start || '?'} → ${o.end || '?'})` : ''}${o.prices?.length ? ' ' + o.prices.join('/') : ''}`]));
+  const conts = (R) => new Map(R.containers.map((c) => [c.id, c]));
+  const sections = [];
+  const add = (title, d) => { if (d.added.length || d.removed.length) sections.push(`## ${title}\n\n${d.added.map((x) => '- **Added:** ' + x).join('\n')}${d.added.length && d.removed.length ? '\n' : ''}${d.removed.map((x) => '- **Removed:** ' + x).join('\n')}`); };
+  const ca = conts(A), cb = conts(B), cl = [];
+  for (const [id, c] of cb) {
+    const o = ca.get(id);
+    if (!o) cl.push(`- **New container:** ${id} v${c.version}`);
+    else if (o.version !== c.version) cl.push(`- **${id} republished:** v${o.version} → v${c.version}; active tags ${o.activeTags} → ${c.activeTags}, paused ${o.pausedTags} → ${c.pausedTags}, triggers ${o.triggers} → ${c.triggers}`);
+  }
+  for (const id of ca.keys()) if (!cb.has(id)) cl.push(`- **Container gone:** ${id}`);
+  if (cl.length) sections.push('## Containers\n\n' + cl.join('\n'));
+  add('Vendors', setDiff(vendors(A), vendors(B)));
+  add('Ad accounts and pixel IDs', setDiff(ids(A), ids(B)));
+  add('Conversion tags', setDiff(convs(A), convs(B)));
+  add('Server-side signals', setDiff(sst(A), sst(B)));
+  const oa = offers(A), ob = offers(B), ol = [];
+  for (const [k, v] of ob) { if (!oa.has(k)) ol.push(`- **New offer:** ${k}: ${v}`); else if (oa.get(k) !== v) ol.push(`- **Changed:** ${k}: ${oa.get(k)} → ${v}`); }
+  for (const k of oa.keys()) if (!ob.has(k)) ol.push(`- **No longer found:** ${k}`);
+  if (ol.length) sections.push('## Promos\n\n' + ol.join('\n'));
+  const ma = A.cost?.totals?.marketing, mb = B.cost?.totals?.marketing;
+  if (ma && mb && (ma.requests !== mb.requests)) sections.push(`## Tracking weight\n\n- Marketing requests per page load: ${ma.requests} → ${mb.requests}`);
+  return `# ${B.site}: changes from ${(A.capturedAt || '').slice(0, 10)} to ${(B.capturedAt || '').slice(0, 10)}\n\n` + (sections.join('\n\n') || 'No changes in containers, vendors, accounts, conversions, server-side signals, promos or tracking weight.') + '\n';
+}
+
 // ---------- main ----------
 if (cmd === 'extract') {
   const out = opt('-o', null) || 'capture.json';
@@ -329,7 +419,7 @@ if (cmd === 'extract') {
 } else if (cmd === 'analyze') {
   const out = opt('-o', null);
   const file = rest[0] || die('usage: analyze <capture.json> [-o outdir]');
-  const cap = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const cap = readJson(file);
   const R = analyze(cap);
   const dir = out || path.join('out', R.site);
   fs.mkdirSync(dir, { recursive: true });
@@ -365,6 +455,20 @@ if (cmd === 'extract') {
   s += `\n\n## Pixels by platform\n\n` + md.table(['Platform', 'Accounts', 'Events (count, values)'], Object.entries(A.platforms).map(([v, p]) => [v, [...p.accounts].join(', '), Object.entries(p.events).map(([e, x]) => `${e} ×${x.count}${x.values.size ? ' [' + [...x.values].join('|') + ']' : ''}`).join('; ')]));
   fs.writeFileSync(path.join(out, 'recording.md'), s);
   console.log(`recording: ${items.length} items -> ${out}/recording.{md,csv}`);
+} else if (cmd === 'store') {
+  const root = opt('--root', null) || die('usage: store <capture.json[.gz]> --root <store dir> [--date YYYY-MM-DD]');
+  const date = opt('--date', null);
+  const r = storePull(rest[0] || die('usage: store <capture.json[.gz]> --root <dir>'), root, date);
+  if (r.prev) fs.writeFileSync(path.join(root, r.rel, 'changes.md'), diffReports(readJson(path.join(root, r.prev.path, 'report.json')), r.R)), r.files.push(r.rel + '/changes.md');
+  console.log(`stored ${r.R.site} -> ${path.join(root, r.rel)}${r.prev ? ` (changes since ${r.prev.date} in changes.md)` : ''}\nwritten:\n` + r.files.map((f) => '  ' + f).join('\n'));
+} else if (cmd === 'index') {
+  const root = opt('--root', null) || die('usage: index --root <store dir>');
+  console.log(`indexed ${rebuildIndex(root)} pulls -> ${root}/INDEX.md`);
+} else if (cmd === 'diff') {
+  const out = opt('-o', null);
+  if (rest.length < 2) die('usage: diff <old report.json> <new report.json> [-o changes.md]');
+  const t = diffReports(readJson(rest[0]), readJson(rest[1]));
+  if (out) { fs.writeFileSync(out, t); console.log('-> ' + out); } else console.log(t);
 } else {
-  console.log(fs.readFileSync(new URL(import.meta.url), 'utf8').split('\n').slice(1, 8).join('\n'));
+  console.log(fs.readFileSync(new URL(import.meta.url), 'utf8').split('\n').slice(1, 10).join('\n'));
 }
