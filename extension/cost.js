@@ -90,9 +90,10 @@ export function analyzeCost(page) {
     },
     timing: page.network.timing || null,
     vendors,
-    note: tot.marketing.hidden + tot.other3p.hidden
-      ? `${tot.marketing.hidden + tot.other3p.hidden} third-party requests don't expose their size to the page (no Timing-Allow-Origin header), so byte totals are a minimum.`
-      : null,
+    note: [
+      res.length < 30 ? `Only ${res.length} requests were recorded: the site clears the browser's request log, so these numbers and the network-based vendor list are incomplete (the tag containers are still read in full).` : null,
+      tot.marketing.hidden + tot.other3p.hidden ? `${tot.marketing.hidden + tot.other3p.hidden} third-party requests don't expose their size to the page (no Timing-Allow-Origin header), so byte totals are a minimum.` : null,
+    ].filter(Boolean).join(' ') || null,
     fmt: { kb },
   };
 }

@@ -273,6 +273,8 @@ await (async () => {
   // An entity also lives under a non-offer folder (/locations/x, /stores/x, /dealers/x, /products/x)
   const isEntity = (seg) => {
     const parents = parentsOf.get(seg.toLowerCase());
+    // A folder named for an offer itself (/pricing, /deals, /promotions) is never a store or city
+    if (/^(pricing|prices|plans?|promos?|promotions?|offers?|deals?|specials?|sales?|discounts?|coupons?|clearance|outlet|rewards|loyalty|membership|gift-?cards?|trial|free-trial)$/i.test(seg)) return false;
     return !!parents && parents.size >= 2 && !/^\d+$/.test(seg) && [...parents].some((par) => par && !PROMO.test(par));
   };
   const offerKey = (pathname) => pathname.split('/').filter(Boolean).map((seg) => (isEntity(seg) || /^locations?$/i.test(seg) ? '*' : seg)).join('/').replace(/(^|\/)\*(\/\*)+/g, '$1*');
@@ -311,8 +313,22 @@ await (async () => {
       else { meta.copies++; meta.variants = variants; }
     }
   }
+  // Rank pages that are clearly about offers or prices ahead of pages that only share a word with them
+  // (a SaaS "sales pipeline" feature page, a "campaign management" template), then by sitemap date
+  const STRONG = /pricing|\bplans?\b|promo|\boffers?\b|discount|coupon|\bspecials?\b|\bdeals?\b|black-?friday|cyber|bfcm|clearance|\btrials?\b|\bfree\b|\bsales?\b$|\/sale|rebate|financing|\d+-?off\b|percent-?off|bogo|\bsave\b|savings|membership|rewards|loyalty|\brefer/i;
+  const strength = (u) => {
+    let path = '';
+    try { path = new URL(u).pathname.toLowerCase(); } catch {}
+    const segs = path.split('/').filter(Boolean);
+    let sc = 0;
+    if (STRONG.test(path)) sc += 3;
+    if (segs.some((seg) => /^(pricing|plans?|promos?|promotions?|offers?|deals?|specials?|sales?|discounts?|coupons?|clearance|outlet|trial|free-trial|black-friday|cyber-monday|rewards|membership)$/.test(seg))) sc += 3;
+    if (segs.length <= 2) sc += 1;
+    if (/template|use-case|customer|stor(y|ies)|agent|integration|feature|solution|partner|webinar|event|guide|course|academy/.test(path)) sc -= 5;
+    return sc;
+  };
   const picked = [...byOffer.values()]
-    .sort((a, b) => String(b[1].lastmod || '').localeCompare(String(a[1].lastmod || '')))
+    .sort((a, b) => strength(b[0]) - strength(a[0]) || String(b[1].lastmod || '').localeCompare(String(a[1].lastmod || '')))
     .slice(0, maxPages);
 
   // ---- fetch and read each promo page ----

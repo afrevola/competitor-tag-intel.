@@ -3,12 +3,13 @@
 import { decodeHit } from './pixels.js';
 import { analyzeShopify } from './shopify.js';
 
-const PURCHASE_EVENT = /purchase|conversion|complete|order|checkout_complete|booking_completed|transaction|sale/i;
+const PURCHASE_EVENT = /purchase|complete|order|checkout_complete|booking_completed|transaction|\bsale\b|payment|paid|subscri/i;
 const PURCHASE_TRIGGER = /purchase|complet|confirm|thank|order|success|paid|payment|transaction|receipt|booked/i;
 const LEAD_EVENT = /lead|submit|sign_?up|subscribe|register|contact|form|request|schedule/i;
-const PAGE_EVENTS = /^(gtm\.js|gtm\.dom|gtm\.load|gtm\.init|gtm\.historyChange|pageview|page_view|OneTrustGroupsUpdated|OneTrustLoaded|OptanonLoaded)$/i;
+// Page loads, plus consent-banner events that fire on every page once consent is known
+const PAGE_EVENTS = /^(gtm\.js|gtm\.dom|gtm\.load|gtm\.init|gtm\.init_consent|gtm\.historyChange|pageview|page_view|OneTrust\w*|Optanon\w*|cookiehub_\w+|cookiehub_\(ready\|modified\)|Cookiebot\w*|cookie_?consent\w*|consent_?(ready|update|given|loaded|default)\w*|CookieScript\w*|usercentrics\w*|didomi\w*|tcf\w*)$/i;
 const triggerEvents = (f) => [...f.matchAll(/\{\{Event\}\} (?:equals|matches RegEx|contains) (\S+)/g)].map((m) => m[1]);
-const urlConds = (f) => [...f.replace(/NOT \([^)]*\)\)?/g, '').matchAll(/\{\{(?:Page (?:Url|URL|Path|Host)|Custom JS #\d+)\}\} (?:contains|equals|matches RegEx|starts with) (\S+)/g)].map((m) => m[1]).filter((x) => !/^(?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+\/?$|staging|\bdev\b/.test(x)); // skip bare host / environment checks
+const urlConds = (f) => [...f.replace(/NOT \([^)]*\)\)?/g, '').matchAll(/\{\{(?:Page (?:Url|URL|Path|Host)|Custom JS #\d+)\}\} (?:contains|equals|matches RegEx|starts with) (\S+)/g)].map((m) => m[1]).filter((x) => !/^(?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+\/?$|staging|\bdev\b|^(true|false|undefined|null|\d+)$/i.test(x)); // skip bare host / environment checks
 
 const CALL_FNS = { fbq: 'Meta Pixel', snaptr: 'Snapchat', pintrk: 'Pinterest', rdt: 'Reddit', twq: 'Twitter / X', clq: 'Clinch', oaiq: 'OpenAI (oaiq)', qp: 'Quora', ndp: 'Nextdoor', lintrk: 'LinkedIn', spdt: 'Spotify Ads', saq: 'StackAdapt' };
 const VALUE_IN_OBJ = /(?:^|[,{\s])["']?(value|price|revenue|conv_value|event_value|revenue_value|amount|total|tw_sale_amount|gv)["']?\s*:\s*([^,}\n]+)/;
@@ -215,7 +216,11 @@ export function buildConversionMap({ gtm = [], launch = null, page = null }) {
     const trig = (r.firing || []).join(' | ');
     const vk = valueKind(r.value, r.variables);
     r.valueText = vk.text;
-    const isPurchase = PURCHASE_EVENT.test(r.event) && !/^counter /.test(r.event);
+    // Google Ads events are just "conversion <label>", so judge them by what triggers them
+    const evText = /^conversion /.test(r.event) ? (r.firing || []).flatMap(triggerEvents).join(' ') : r.event;
+    const isPurchase = PURCHASE_EVENT.test(evText) && !/^counter /.test(r.event);
+    if (/company_?size|employees|industry|annual_?revenue|seniority|job_?(title|level)|lead_?score|is_?qualified/i.test(trig)) r.flags.push(['info', 'Counts only leads that match firmographic rules (company size, industry or similar): a lead-quality filter']);
+    if (/\{\{(Page Query|Page URL|Page Url)\}\}[^|]*brand/i.test(trig)) r.flags.push(['info', 'Only for visitors arriving from brand-search ads']);
     if (r.paused) r.flags.push(['paused', 'Paused']);
     if (!r.firing?.length && !r.paused) r.flags.push(['warn', 'No firing trigger']);
     if (vk.fixed != null) r.flags.push([vk.fixed <= 1 ? 'warn' : 'info', vk.fixed <= 1 ? `Fixed value ${vk.fixed} (counts conversions, not revenue)` : `Fixed value ${vk.fixed}`]);
@@ -251,6 +256,17 @@ export function buildConversionMap({ gtm = [], launch = null, page = null }) {
         r.flags.push(['info', `Same trigger as ${others} (different conversion); both may count`]);
       }
     }
+  }
+  // The same conversion set up in two containers that both load: it can fire once per container
+  const byConv = {};
+  for (const r of rows) {
+    if (r.paused || !r.label || r.container === 'Shopify') continue;
+    (byConv[`${r.platform}|${r.account}|${r.label}|${r.event}`] ||= []).push(r);
+  }
+  for (const list of Object.values(byConv)) {
+    const conts = [...new Set(list.map((r) => r.container))];
+    if (conts.length < 2) continue;
+    for (const r of list) r.flags.push(['bad', `Also set up in ${conts.filter((c) => c !== r.container).join(', ')}; both load on this page, so it may count twice`]);
   }
   rows.forEach((r) => delete r.variables);
   return rows;

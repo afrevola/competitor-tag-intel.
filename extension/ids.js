@@ -66,6 +66,14 @@ export function extractAccountIds({ page, gtm = [], launch = null, extraUrls = [
   const add = (platform, id, source) => {
     id = norm(platform, id);
     if (!id) return;
+    // Put Google IDs under the platform their prefix says, and drop IDs that can't belong to the platform
+    if (/^AW-\d+$/.test(id)) platform = 'Google Ads';
+    else if (/^DC-\d+$/.test(id)) platform = 'Floodlight / CM360';
+    else if (/^G-[A-Z0-9]+$/.test(id)) platform = 'GA4';
+    else if (/^GTM-/.test(id)) platform = 'Google Tag Manager';
+    if (platform === 'GA4' && !/^G-/.test(id)) return;
+    if (platform === 'Google Ads' && !/^AW-/.test(id)) return;
+    if (platform === 'Meta Pixel' && !/^\d{12,17}$/.test(id)) { if (/^[A-Z0-9]{20}$/.test(id)) platform = 'TikTok'; else return; }
     if (!out.has(platform)) out.set(platform, new Map());
     const m = out.get(platform);
     if (!m.has(id)) m.set(id, new Set());
