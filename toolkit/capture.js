@@ -200,8 +200,10 @@ await (async () => {
   const maxSitemaps = opts.maxSitemaps || 10;
   const origin = location.origin;
   // Offer / campaign words across industries (retail, travel, SaaS, finance, auto, venues, food, services)
-  const PROMO = /special|deal|promo|offer|discount|sale\b|sales-?event|clearance|outlet|coupon|voucher|rebate|cash-?back|holiday|black-?friday|cyber|bfcm|prime-?day|\blto\b|limited|bogo|free|trial|pricing|\bplans?\b|subscri|membership|rewards?|loyalty|refer|bundle|combo|package|unlimited|gift|campaign|\/lp\/|landing|seasonal|summer|winter|spring|\bfall\b|valentine|halloween|thanksgiving|christmas|xmas|new-?year|nye|easter|ramadan|diwali|lunar-?new-?year|mothers?-?day|fathers?-?day|graduat|grads?\b|back-?to-?school|tax-?(season|day)|military|veteran|student|teacher|nurse|first-?responder|senior|financing|\d+-?apr\b|lease|incentive|trade-?in|happy-?hour|kids-?(eat|stay|fly|free)|season-?pass|\bpass(es)?\b|\bsave\b|savings|percent-?off|\d+-?off\b|anniversary|early-?bird|pre-?order|presale|flash|doorbuster|exclusive/i;
-  const SKIP = /\/(blog|stories|news|press|newsroom|careers|jobs|faq|help|support|docs?|documentation|developers?|api|investors?|ir|privacy|terms|legal|accessibility|sitemap|account|login|sign-?in|register|cart|checkout|wishlist|search|order-status)\b|\.(pdf|jpe?g|png|webp|xml)$/i;
+  const PROMO = /\bspecials?\b|\bdeals?\b|promo|\boffers?\b|discount|\bsales?\b|sales-?event|clearance|\boutlet\b|coupon|voucher|rebate|cash-?back|holiday|black-?friday|cyber|bfcm|prime-?day|\blto\b|limited|bogo|\bfree\b|\btrials?\b|pricing|\bplans?\b|subscri|membership|rewards?|loyalty|\brefer|bundle|\bcombos?\b|packages?\b|unlimited|\bgifts?\b|gift-?cards?|campaign|\/lp\/|landing|seasonal|\bsummer\b|\bwinter\b|\bspring\b|\bfall\b|valentine|halloween|thanksgiving|christmas|xmas|new-?year|\bnye\b|easter|ramadan|diwali|lunar-?new-?year|mothers?-?day|fathers?-?day|graduat|\bgrads?\b|back-?to-?school|tax-?(season|day)|military|veteran|student|teacher|\bnurses?\b|first-?responder|\bseniors?\b|financing|\d+-?apr\b|\blease\b|incentive|trade-?in|happy-?hour|kids-?(eat|stay|fly|free)|season-?pass|\bpass(es)?\b|\bsave\b|savings|percent-?off|\d+-?off\b|anniversary|early-?bird|pre-?order|presale|\bflash\b|doorbuster|exclusive/i;
+  const SKIP = /\/(blog|stories|news|press|newsroom|careers|jobs|faq|help|support|docs?|documentation|developers?|api|investors?|ir|privacy|terms|legal|accessibility|sitemap|account|login|sign-?in|register|cart|checkout|wishlist|search|s|order-status|reviews?|recipes?|articles?|tags?|authors?)\/|\/(search|s)$|\+|%20|\.(pdf|jpe?g|png|webp|xml)$/i;
+  // Sitemaps of search keywords, products, stores, brands, media or articles rarely hold offer pages
+  const LOW_SITEMAP = /keyword|search|pdp|product|item|sku|stores?|location|brand|image|video|review|recipe|blog|article|post|author|tag|news/i;
 
   const get = async (u, ms = 9000) => {
     try {
@@ -235,7 +237,8 @@ await (async () => {
   const seenMaps = new Set();
   let fetched = 0;
   while (queue.length && fetched < maxSitemaps) {
-    queue.sort((a, b) => (PROMO.test(b) || /page|landing/.test(b)) - (PROMO.test(a) || /page|landing/.test(a)));
+    const rank = (u) => (PROMO.test(u) || /page|landing|categor|collection|campaign/.test(u) ? 2 : 0) - (LOW_SITEMAP.test(u.split('/').pop()) ? 1 : 0);
+    queue.sort((a, b) => rank(b) - rank(a));
     const sm = queue.shift();
     if (seenMaps.has(sm)) continue;
     seenMaps.add(sm);

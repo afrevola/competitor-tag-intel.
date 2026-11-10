@@ -115,6 +115,14 @@ export function extractAccountIds({ page, gtm = [], launch = null, extraUrls = [
     }
   }
 
+  // Adobe Launch gtag extension accounts
+  for (const e of launch?.extensions || []) {
+    for (const v of Object.values(e.settings?.accounts || {})) {
+      const id = v?.accounts?.production;
+      if (!id) continue;
+      add(/^AW-/.test(id) ? 'Google Ads' : /^DC-/.test(id) ? 'Floodlight / CM360' : /^G-/.test(id) ? 'GA4' : 'Google tag', id, `Launch extension "${e.name}"${v.name ? ` (${v.name})` : ''}`);
+    }
+  }
   // Adobe Launch custom code
   for (const r of launch?.rules || []) {
     for (const a of r.actions || []) scanCode(a.code, `Launch rule "${r.name}"`);

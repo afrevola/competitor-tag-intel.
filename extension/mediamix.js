@@ -29,7 +29,17 @@ export function buildMediaMix({ page, gtm = [], launch = null, extraUrls = [] })
       for (const v of t.vendors || []) add(v, `GTM ${id}`);
     }
   }
+  for (const e of launch?.extensions || []) {
+    for (const v of Object.values(e.settings?.accounts || {})) {
+      if (/sa ?360|search ads 360/i.test(v?.name || '')) add('Search Ads 360', 'Adobe Launch');
+      const id = v?.accounts?.production || '';
+      if (/^AW-/.test(id)) add('Google Ads', 'Adobe Launch');
+      if (/^DC-/.test(id)) add('Floodlight / CM360', 'Adobe Launch');
+    }
+  }
   for (const r of launch?.rules || []) {
+    // Rule names are written by the site's team and usually name the vendor ("Pushly - purchase", "impact radius")
+    detectVendors(r.name).forEach((v) => add(v, 'Adobe Launch rule name'));
     for (const a of r.actions || []) {
       if (a.ext === 'adobe-analytics') add('Adobe Analytics', 'Adobe Launch');
       if (a.ext && a.ext.startsWith('adobe-target')) add('Adobe Target', 'Adobe Launch');

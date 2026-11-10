@@ -144,6 +144,58 @@ export function buildConversionMap({ gtm = [], launch = null, page = null }) {
   }
 
   // Adobe Launch rules
+  // Accounts configured in Launch's "Google Global Site Tag (gtag)" extension: key -> { type, id, name }
+  const gtagAccounts = {};
+  for (const e of launch?.extensions || []) {
+    for (const [k, v] of Object.entries(e.settings?.accounts || {})) {
+      const id = v?.accounts?.production || v?.accounts?.staging || null;
+      if (id) gtagAccounts[k] = { type: v.type, id, name: v.name || '' };
+    }
+  }
+  // Launch rule triggers written like GTM triggers, so the same flags apply
+  const launchFiring = (r) => {
+    const ev = r.events.map((e) => {
+      const st = e.settings || {};
+      if (/datalayerPushListener|dataLayerPush|customEvent/i.test(e.type) && (st.eventKey || st.eventName || st.type)) return `{{Event}} equals ${st.eventKey || st.eventName || st.type}`;
+      if (/libraryLoaded|pageBottom|domReady|windowLoaded/i.test(e.type)) return '{{Event}} equals gtm.js';
+      if (/directCall/i.test(e.type)) return `{{Event}} equals ${st.identifier || 'direct call'}`;
+      return e.type;
+    });
+    // Privacy opt-out checks (Global Privacy Control, Do Not Track) are noted, not treated as triggers
+    const privacy = r.conditions.filter((c) => /%(GPC|DoNotTrack|DNT)%/i.test(String(c.settings?.leftOperand || '')));
+    const conds = r.conditions.filter((c) => !privacy.includes(c)).map((c) => {
+      const st = c.settings || {};
+      if (c.type === 'valueComparison') {
+        const left = String(st.leftOperand || '').replace(/^%Page (Path|URL|Url)%$/, '{{Page $1}}').replace(/^\{\{Page Url\}\}$/, '{{Page URL}}');
+        const op = { equals: 'equals', contains: 'contains', startsWith: 'starts with', matchesRegex: 'matches RegEx', doesNotEqual: 'does not equal' }[st.comparison?.operator] || st.comparison?.operator;
+        return `${left} ${op} ${st.rightOperand}`;
+      }
+      return c.type + (c.negate ? ' (not)' : '');
+    });
+    return [ev.join(' or ') + (conds.length ? ' AND ' + conds.join(' AND ') : '') + (privacy.length ? ' (skipped for GPC / Do Not Track opt-outs)' : '')];
+  };
+  for (const r of launch?.rules || []) {
+    for (const a of r.actions || []) {
+      if (!/gtag/i.test(a.ext || '') || a.type !== 'event') continue;
+      const st = a.settings || {};
+      const opts = Object.fromEntries((st.options || []).filter((o) => Array.isArray(o)));
+      for (const [k, acc] of Object.entries(st.accounts || {})) {
+        if (acc && acc.enabled === false) continue;
+        const A = gtagAccounts[k] || {};
+        const label = acc?.label || '';
+        const base = { container: 'Adobe Launch', tag: r.name, tagType: 'gtag extension', paused: false, firing: launchFiring(r), blocking: [], how: 'Launch gtag extension', accountName: A.name };
+        if (A.type === 'dc' || /^DC-/.test(A.id || '')) {
+          const [act, counting] = label.split('+');
+          const sales = /transactions|items_sold/i.test(counting || '');
+          push({ ...base, platform: 'Floodlight / CM360', account: A.id, event: `${sales ? 'sales' : 'counter'} ${act}${counting ? ' (' + counting + ')' : ''}`, label: act, value: sales ? opts.value ?? null : null, counter: !sales, counting });
+        } else if (A.type === 'aw' || /^AW-/.test(A.id || '')) {
+          push({ ...base, platform: 'Google Ads', account: A.id, event: `${st.name || 'conversion'} (${label})`, label, value: opts.value ?? null, currency: opts.currency, newCustomer: 'new_customer' in opts });
+        } else if (/^G-/.test(A.id || '')) {
+          push({ ...base, platform: 'GA4', account: A.id, event: st.name || 'event', label: st.name, value: opts.value ?? null });
+        }
+      }
+    }
+  }
   for (const r of launch?.rules || []) {
     const firing = [`Launch rule "${r.name}" (${r.events.map((e) => e.type).join(', ')})`];
     for (const a of r.actions || []) {

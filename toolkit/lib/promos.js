@@ -156,6 +156,14 @@ export function analyzePromos(scan, today = new Date()) {
     delete o._names; delete o._entities;
     offers.push(o);
   }
+  // Prices on most pages are site-wide boilerplate (a free-shipping threshold, a membership fee), not offers
+  let sitewidePrices = [];
+  if (offers.length >= 5) {
+    const freq = {};
+    for (const o of offers) for (const pr of new Set(o.prices)) freq[pr] = (freq[pr] || 0) + 1;
+    sitewidePrices = Object.entries(freq).filter(([, n]) => n / offers.length >= 0.6).map(([pr]) => pr);
+    for (const o of offers) o.prices = o.prices.filter((pr) => !sitewidePrices.includes(pr));
+  }
   const order = { active: 0, upcoming: 1, 'ongoing / no dates': 2, expired: 3, 'expired (page redirects)': 4 };
   offers.sort((a, b) => order[a.status] - order[b.status] || String(a.end || '9').localeCompare(String(b.end || '9')));
 
@@ -194,6 +202,7 @@ export function analyzePromos(scan, today = new Date()) {
     candidatePages: scan.candidates,
     pagesRead: (scan.pages || []).length,
     offers,
+    sitewidePrices,
     campaignFolders,
     fiscalPeriods,
     phases,

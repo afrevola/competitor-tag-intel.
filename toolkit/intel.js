@@ -203,6 +203,7 @@ function reportMd(R) {
   if (R.promos) {
     const P = R.promos;
     s += `\n## Promos & campaigns\n\nRead ${P.pagesRead} promo pages (${P.candidates} candidates; sitemap has ${P.sitemapUrlCount} URLs).\n\n`;
+    if (P.sitewidePrices?.length) s += `_Left out of the table: ${P.sitewidePrices.join(', ')} ${P.sitewidePrices.length > 1 ? 'appear' : 'appears'} on most pages read (site-wide text such as a free-shipping threshold, or standard prices)._\n\n`;
     if (P.offers.length) s += md.table(['Offer', 'Status', 'Dates', 'Prices', 'Restriction', 'URL'], P.offers.map((o) => [o.name + (o.copies > 1 ? ` (×${o.copies}${o.variants ? ': ' + o.variants.slice(0, 6).join(', ') + (o.variants.length > 6 ? ', …' : '') : ''})` : ''), o.status, o.start || o.end ? `${o.start || '…'} → ${o.end || '…'}` : '', [...o.prices, ...o.percentOff].join(' '), o.restriction || '', o.url]));
     if (P.campaignFolders.length) s += `\n**Campaign asset folders**\n\n` + md.table(['Folder', 'Tokens', 'Files'], P.campaignFolders.slice(0, 15).map((f) => [f.folder, f.tokens.join(', '), `${f.fileCount}: ${f.files.slice(0, 3).join(', ')}`]));
     if (P.recent.length) s += `\n**Recently updated pages (sitemap)**\n\n` + P.recent.slice(0, 12).map((r) => `- ${r.lastmod.slice(0, 10)} ${r.url}`).join('\n') + '\n';

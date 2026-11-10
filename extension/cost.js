@@ -13,6 +13,8 @@ const INFRA = [
   ['Google Maps', /maps\.(googleapis|gstatic)\.com/i, 'Site features'],
   ['YouTube / Vimeo', /youtube\.com|ytimg\.com|vimeo/i, 'Site features'],
   ['Sentry', /sentry\.io|sentry-cdn/i, 'Site features'],
+  ['Bot / fraud protection', /px-cloud\.net|perimeterx|humansecurity|zeronaught|datadome|captcha-delivery|kasada|akamai-bm|hcaptcha|recaptcha/i, 'Site features'],
+  ['Performance monitoring', /speedcurve|newrelic|nr-data|dynatrace|akstat|mpulse|go-mpulse/i, 'Site features'],
   ['Payments', /cybersource|cardconnect|stripe\.com|braintree|paypal|adyen|afterpay|cash\.app|pay\.google|applepay/i, 'Site features'],
   ['Auth', /okta|auth0|cognito/i, 'Site features'],
   ['Chat / support', /intercom|zendesk|livechat|drift\.com|salesforce-sites|liveperson/i, 'Site features'],
@@ -40,7 +42,9 @@ export function analyzeCost(page) {
     try { host = new URL(r.u).hostname; } catch { continue; }
     if (/^(data|blob):/.test(r.u)) continue;
     const bytes = r.transfer || r.encoded || 0;
-    const first = site(host) === own;
+    // Brand-owned asset domains (targetimg1.com for target.com) count as the site itself
+    const stem = own.split('.')[0];
+    const first = site(host) === own || (stem.length >= 4 && site(host).split('.')[0].startsWith(stem));
     let vendor = null, channel = null, bucket;
     const infra = INFRA.find(([, re]) => re.test(r.u));
     const mk = detectVendors(host + new URL(r.u).pathname + ' ' + r.u.slice(0, 200))[0];
