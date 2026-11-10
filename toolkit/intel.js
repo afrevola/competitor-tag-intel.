@@ -17,6 +17,7 @@ import { buildMediaMix } from './lib/mediamix.js';
 import { analyzeServerSide } from './lib/sst.js';
 import { analyzePromos } from './lib/promos.js';
 import { analyzeCost } from './lib/cost.js';
+import { analyzeShopify } from './lib/shopify.js';
 import { analyzeRecording, recordingCsv } from './lib/recording.js';
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -128,18 +129,20 @@ function analyze(cap) {
     } catch (e) { containerSummary.push({ id, error: e.message }); }
   }
   const launch = page.launch || null;
-  const conversions = buildConversionMap({ gtm, launch });
+  const conversions = buildConversionMap({ gtm, launch, page });
   const accountIds = extractAccountIds({ page, gtm, launch });
   const mediaMix = buildMediaMix({ page, gtm, launch });
   const serverSide = analyzeServerSide(page, gtm, launch);
   const promos = cap.promos && !cap.promos.error ? analyzePromos(cap.promos, new Date(cap.capturedAt)) : null;
   const cost = analyzeCost(page);
+  const shopify = analyzeShopify(page);
   const { domain, brand } = siteBrand(page.host);
   const libraries = adLibraryLinks({ domain, brand }, accountIds.map((p) => p.platform).concat(mediaMix.channels.flatMap((c) => c.vendors.map((v) => v.name))));
   if (cost) delete cost.fmt;
   return {
     site: domain, url: page.url, host: page.host, capturedAt: cap.capturedAt,
-    tagManagers: [...new Set([...(gtm.length ? ['Google Tag Manager'] : []), ...(launch ? ['Adobe Launch'] : [])])],
+    tagManagers: [...new Set([...(gtm.length ? ['Google Tag Manager'] : []), ...(launch ? ['Adobe Launch'] : []), ...(shopify?.pixels.length ? ['Shopify customer events (app pixels)'] : [])])],
+    shopify,
     containers: containerSummary,
     googleTags: page.containers.filter((c) => !/^GTM-/.test(c.id)).map((c) => c.id),
     launch: launch ? { property: launch.property, built: launch.buildInfo?.buildDate || null, rules: launch.rules.length, dataElements: launch.dataElements.length, extensions: launch.extensions.map((e) => e.name) } : null,
@@ -188,6 +191,14 @@ function reportMd(R) {
   s += `\n## Conversions\n\n` + md.table(['Platform', 'Active tags'], R.conversions.byPlatform);
   const flagged = R.conversions.rows.filter((r) => r.flags.length && !r.paused).slice(0, 30);
   if (flagged.length) s += `\n**Flagged**\n\n` + md.table(['Platform', 'Event', 'Value sent', 'Flags', 'Source'], flagged.map((r) => [r.platform, r.event.slice(0, 60), String(r.value).slice(0, 50), r.flags.join('; '), r.source]));
+  if (R.shopify) {
+    const Sh = R.shopify;
+    s += `\n## Shopify\n\nStore ${Sh.shop || '—'}${Sh.theme?.schema ? ` · theme ${Sh.theme.schema}${Sh.theme.name && Sh.theme.name !== Sh.theme.schema ? ` ("${Sh.theme.name}")` : ''}` : ''}${Sh.currency ? ` · ${Sh.currency}` : ''}. Pixels set up inside Shopify fire on Shopify's standard customer events (page view, product view, add to cart, checkout, purchase); purchase values come from the order.\n\n`;
+    if (Sh.pixels.length) s += md.table(['App pixel', 'Data use', 'Events sent'], Sh.pixels.map((p) => [p.app, (p.purposes || []).join(', ').toLowerCase() || '—', p.events.length ? [...new Set(p.events)].join(', ') : 'Shopify standard events']));
+    const conv = R.conversions.rows.filter((r) => /^Shopify/.test(r.source) && r.platform !== 'GA4');
+    if (conv.length) s += `\n**Conversions from Shopify app pixels**\n\n` + md.table(['Platform', 'Account', 'Event', 'Value sent'], conv.map((r) => [r.platform, r.account || '', r.event, r.value || '—']));
+    if (Sh.apps.length) s += `\n**Theme app embeds:** ${Sh.apps.map((a) => a.vendor ? `${a.vendor} (${a.handle})` : a.handle).join(', ')}\n`;
+  }
   if (R.serverSide.length) s += `\n## Server-side / first-party tracking\n\n` + R.serverSide.map((f) => `- **${f.signal}** (${f.verdict}): ${f.detail}${f.evidence[0] ? ` — e.g. \`${f.evidence[0].slice(0, 120)}\`` : ''}`).join('\n') + '\n';
   if (R.promos) {
     const P = R.promos;

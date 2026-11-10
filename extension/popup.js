@@ -476,7 +476,7 @@ VIEWS.overview = {
 
 VIEWS.conv = {
   header() {
-    this.rows = buildConversionMap({ gtm: gtmLoaded(), launch: state.page.launch });
+    this.rows = buildConversionMap({ gtm: gtmLoaded(), launch: state.page.launch, page: state.page });
     const platforms = countBy(this.rows.filter((r) => !r.paused).map((r) => r.platform));
     const flagged = this.rows.filter((r) => r.flags.some((f) => f[0] === 'bad' || f[0] === 'warn')).length;
     $('#summary').innerHTML = this.rows.length

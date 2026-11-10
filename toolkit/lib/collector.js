@@ -52,7 +52,7 @@ export async function collectPage() {
     let url;
     try { url = new URL(u, location.href); } catch { return; }
     const id = url.searchParams.get('id');
-    if (!id || !/^(GTM|G|AW|DC)-[A-Za-z0-9]+$/i.test(id)) return;
+    if (!id || !/^(GTM|GT|G|AW|DC)-[A-Za-z0-9]+$/i.test(id)) return;
     const isLoader = /gtm\.js|gtag\/js/.test(url.pathname) || !/googletagmanager\.com$/.test(url.hostname);
     const isNs = /ns\.html/.test(url.pathname);
     if (!isLoader && !isNs) return;
@@ -66,9 +66,9 @@ export async function collectPage() {
   document.querySelectorAll('noscript').forEach((n) => (n.textContent.match(/https?:[^"'\s]+ns\.html\?id=[^"'\s]+/g) || []).forEach(check));
   let resources = [];
   try { resources = performance.getEntriesByType('resource').map((e) => e.name); } catch {}
-  resources.forEach((u) => { if (/[?&]id=(GTM|G|AW|DC)-/i.test(u) && /gtm\.js|gtag\/js|googletagmanager/.test(u)) check(u); });
+  resources.forEach((u) => { if (/[?&]id=(GTM|GT|G|AW|DC)-/i.test(u) && /gtm\.js|gtag\/js|googletagmanager/.test(u)) check(u); });
   try {
-    if (window.google_tag_manager) Object.keys(window.google_tag_manager).forEach((k) => { if (/^(GTM|G|AW|DC)-/.test(k)) add(k, null); });
+    if (window.google_tag_manager) Object.keys(window.google_tag_manager).forEach((k) => { if (/^(GTM|GT|G|AW|DC)-/.test(k)) add(k, null); });
   } catch {}
 
   // ---- Data layers ----
@@ -147,9 +147,46 @@ export async function collectPage() {
     };
   } catch {}
 
+  // ---- Shopify: app pixels configured in Shopify (webPixelsConfigList) and theme app embeds ----
+  let shopify = null;
+  try {
+    const sliceArr = (text, from) => {
+      const start = text.indexOf('[', from);
+      if (start < 0) return null;
+      let depth = 0, inStr = false, esc = false;
+      for (let i = start; i < text.length; i++) {
+        const ch = text[i];
+        if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+        if (ch === '"') inStr = true;
+        else if (ch === '[' || ch === '{') depth++;
+        else if (ch === ']' || ch === '}') { depth--; if (depth === 0) return text.slice(start, i + 1); }
+      }
+      return null;
+    };
+    const webPixels = [];
+    for (const sc of document.scripts) {
+      if (sc.src || !sc.textContent.includes('webPixelsConfigList')) continue;
+      const t = sc.textContent;
+      const arr = sliceArr(t, t.indexOf('webPixelsConfigList'));
+      try {
+        for (const px of JSON.parse(arr) || []) webPixels.push({ id: px.id, type: px.type, apiClientId: px.apiClientId, runtime: px.runtimeContext, purposes: px.privacyPurposes, config: String(px.configuration || '').slice(0, 20000) });
+      } catch {}
+      break;
+    }
+    const appEmbeds = [...new Set(scripts.map((u) => (u.match(/cdn\.shopify\.com\/extensions\/[^/]+\/([^/]+)\//) || [])[1]).filter(Boolean).map((h) => h.replace(/-\d+$/, '')))];
+    const S = window.Shopify;
+    if (S || webPixels.length || appEmbeds.length) shopify = {
+      shop: S?.shop || null,
+      theme: S?.theme ? { name: S.theme.name || null, id: S.theme.id || null, schema: S.theme.schema_name || null } : null,
+      currency: S?.currency?.active || null, country: S?.country || null,
+      webPixels, appEmbeds,
+    };
+  } catch {}
+
   return {
     url: location.href,
     host: location.hostname,
+    shopify,
     containers: [...found].map(([id, src]) => ({ id, src })),
     dataLayers,
     launch,

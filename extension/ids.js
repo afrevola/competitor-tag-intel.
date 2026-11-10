@@ -59,6 +59,8 @@ const norm = (platform, id) => {
   return id;
 };
 
+import { analyzeShopify } from './shopify.js';
+
 export function extractAccountIds({ page, gtm = [], launch = null, extraUrls = [] }) {
   const out = new Map(); // platform -> Map(id -> Set(source))
   const add = (platform, id, source) => {
@@ -117,6 +119,9 @@ export function extractAccountIds({ page, gtm = [], launch = null, extraUrls = [
   for (const r of launch?.rules || []) {
     for (const a of r.actions || []) scanCode(a.code, `Launch rule "${r.name}"`);
   }
+
+  // Shopify app pixels
+  for (const [platform, id, source] of analyzeShopify(page)?.ids || []) add(platform, id, source);
 
   // Network traffic (page load, plus a recording if there is one)
   function scanUrl(u, source) {

@@ -1,5 +1,6 @@
 // Summarizes every marketing vendor seen on the site by channel, plus agency fingerprints.
 import { CHANNELS, channelOf, detectVendors, AGENCY_SIGNALS } from './vendors.js';
+import { analyzeShopify } from './shopify.js';
 
 const BUILTIN = {
   __awct: 'Google Ads', __sp: 'Google Ads', __awud: 'Google Ads', __awcc: 'Google Ads', __gclidw: 'Google Ads',
@@ -40,6 +41,8 @@ export function buildMediaMix({ page, gtm = [], launch = null, extraUrls = [] })
     if (/^DC-/.test(c.id)) add('Floodlight / CM360', 'page');
     if (/^G-/.test(c.id)) add('GA4', 'page');
   }
+  const shop = analyzeShopify(page);
+  if (shop) { add('Shopify', 'Shopify'); for (const v of shop.vendors) add(v, 'Shopify'); }
   const urls = [...(page?.network?.urls || []), ...(page?.network?.scripts || []), ...extraUrls];
   // Cookie-sync / ID-match pixels: ad-tech partners of the site's own DSPs firing ID swaps. They show who
   // the site's vendors trade data with, not what the site buys, so they're listed apart from the media mix.

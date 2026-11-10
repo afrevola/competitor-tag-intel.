@@ -1,6 +1,7 @@
 // Builds a per-platform conversion map from GTM containers and Adobe Launch rules,
 // with flags for setups that mislead bidding or reporting.
 import { decodeHit } from './pixels.js';
+import { analyzeShopify } from './shopify.js';
 
 const PURCHASE_EVENT = /purchase|conversion|complete|order|checkout_complete|booking_completed|transaction|sale/i;
 const PURCHASE_TRIGGER = /purchase|complet|confirm|thank|order|success|paid|payment|transaction|receipt|booked/i;
@@ -98,9 +99,14 @@ function valueKind(value, variables) {
 
 const unConst = (v) => { const m = String(v ?? '').match(/^\{\{Constant "([^"]+)"\}\}$/); return m ? m[1] : v; };
 
-export function buildConversionMap({ gtm = [], launch = null }) {
+export function buildConversionMap({ gtm = [], launch = null, page = null }) {
   const rows = [];
   const push = (r) => rows.push({ flags: [], ...r });
+
+  // Shopify app pixels (fired by Shopify on its standard customer events)
+  for (const c of analyzeShopify(page)?.conversions || []) {
+    push({ container: 'Shopify', tag: c.platform === 'Google Ads' || c.platform === 'GA4' ? 'Google & YouTube app' : c.platform + ' app', tagType: 'Shopify app pixel', paused: false, firing: [`{{Event}} equals ${c.shopifyEvent}`], blocking: [], shopifyApp: true, ...c });
+  }
 
   for (const { id: cid, data } of gtm) {
     if (!data) continue;
@@ -164,6 +170,8 @@ export function buildConversionMap({ gtm = [], launch = null }) {
     if (vk.scraped) r.flags.push(['warn', 'Value scraped from the page (breaks if the page layout changes)']);
     if (isPurchase && r.valueText === '—' && !r.counter && r.platform !== 'GA4') r.flags.push(['warn', 'No value sent (counted, not valued)']);
     if (/purchase/i.test(r.event) && r.firing?.length && !r.firing.some((f) => PURCHASE_TRIGGER.test(f))) r.flags.push(['bad', '"Purchase" fires on non-purchase steps']);
+    if (r.shopifyApp && r.platform === 'Google Ads' && !/purchase/.test(r.shopifyEvent)) r.flags.push(['info', `Google Ads conversion on "${r.shopifyEvent}" (created by Shopify's Google & YouTube app; usually secondary, so check before reading it as a bidding goal)`]);
+    if (r.shopifyApp) { r.triggerText = trig; continue; }
     if (r.firing?.length && !r.counter && r.platform !== 'GA4' && !/^(page_?visit|page_?view|view_?content|pageload|page)$/i.test(r.event)) {
       const pageOnly = r.firing.every((f) => { const ev = triggerEvents(f); return ev.length ? ev.every((e) => PAGE_EVENTS.test(e)) : /\(always\)/.test(f); });
       if (pageOnly && !r.firing.some((f) => PURCHASE_TRIGGER.test(f))) {

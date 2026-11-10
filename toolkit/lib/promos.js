@@ -125,7 +125,11 @@ export function analyzePromos(scan, today = new Date()) {
   for (const o of offers) {
     const parent = (x) => { try { return new URL(x.url).pathname.replace(/[^/]+\/?$/, ''); } catch { return ''; } };
     // Same text, or same folder and largely the same text (per-store pages with local tweaks)
-    const same = merged.find((m) => m.status === o.status && (jaccard(m._sig, o._sig) >= 0.6 || (parent(m) === parent(o) && parent(o).length > 1 && jaccard(m._sig, o._sig) >= 0.3)));
+    // ...and the names must be the same apart from one place word ("Oakbrook Promotions" / "Miami Promotions"),
+    // so different collections that happen to show the same products stay apart
+    const words = (n) => String(n || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+    const sameName = (x, y) => { const A = words(x), B = new Set(words(y)); const common = A.filter((w) => B.has(w)).length; return common && common * 2 >= A.length && common * 2 >= B.size; };
+    const same = merged.find((m) => m.status === o.status && sameName(m._names[0], o._names[0]) && (jaccard(m._sig, o._sig) >= 0.6 || (parent(m) === parent(o) && parent(o).length > 1 && jaccard(m._sig, o._sig) >= 0.3)));
     if (!same) { merged.push(o); continue; }
     same.copies = (same.copies || 1) + (o.copies || 1);
     same._names.push(...o._names);

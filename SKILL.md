@@ -92,6 +92,7 @@ To see real prices and pixel values in a funnel (checkout, booking, sign-up, quo
 - **Values** in the conversion map are what each ad platform is told, read from the published tags. A fixed value of `1`, a missing value, or a value scraped from page text all change how the platform bids.
 - **"Counts a page visit as a conversion"** means the conversion fires on viewing a page (often a landing page or homepage), not on a purchase, booking, sign-up or lead.
 - **Ad-library links** in the report are generated text only; the toolkit never requests them. Leave them for the user.
+- **Shopify stores** set up most pixels inside Shopify rather than in GTM. The report's Shopify section lists those app pixels, the conversions they send (Shopify sends the order total on purchase) and the installed theme apps. Google Ads conversions created by Shopify's Google & YouTube app on steps like page_view or add_to_cart are usually secondary; don't read them as bidding goals.
 - **Cookie-sync partners** are ad-tech companies whose ID-matching pixels fire because of the site's own ad vendors (e.g. a DSP syncing with SSPs). They are listed separately and are not part of the media mix.
 - **Offers** that appear on many store, city, branch or product pages are grouped into one row with the count and the variants.
 - **Shared account IDs** across sites usually mean a common owner, agency or buying account. **Agency signals** are fingerprints, not proof.

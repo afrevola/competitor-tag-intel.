@@ -45,7 +45,7 @@ export function analyzeCost(page) {
     const infra = INFRA.find(([, re]) => re.test(r.u));
     const mk = detectVendors(host + new URL(r.u).pathname + ' ' + r.u.slice(0, 200))[0];
     // Site platform, payments and chat are part of running the site, not marketing
-    const SITE_SIDE = /^(Site Platform|Payments & Financing|Chat & Support)$/;
+    const SITE_SIDE = /^(Site Platform|Payments & Financing|Chat & Support|Commerce Apps)$/;
     if (mk && SITE_SIDE.test(channelOf(mk))) {
       if (first) { bucket = 'first'; vendor = 'First-party (' + own + ')'; channel = 'Site'; }
       else { vendor = mk; channel = channelOf(mk); bucket = 'infra'; }
