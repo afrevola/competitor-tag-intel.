@@ -87,14 +87,14 @@ export function analyzeExtras(cap, conversionRows = []) {
     const folder = '/' + segs.slice(0, Math.max(1, i + 1)).join('/') + '/';
     lpFolders[folder] = (lpFolders[folder] || 0) + 1;
   }
-  const hiddenLp = (promos.robots?.disallow || []).filter((d) => LP.test(d)).slice(0, 15);
+  const hiddenLp = [...new Set((promos.robots?.disallow || []).filter((d) => LP.test(d)))].slice(0, 15);
   // Campaign names and URL patterns that tags check for
   const tokens = new Map();
   for (const r of conversionRows) {
     for (const f of r.firing || []) {
       for (const m of String(f).matchAll(/\{\{(?:Page Query|Page URL|Page Url|[^}]*utm[^}]*|[^}]*campaign[^}]*)\}\} (?:contains|matches RegEx|equals|starts with) ([^\s|)]+(?:\|[^\s|)]+)*)/gi)) {
         const v = m[1];
-        if (/^https?:|\.(com|net|org|io|co)\b/.test(v) || v.length < 3) continue;
+        if (/^\^?https?:|\.(com|net|org|io|co)\b/.test(v) || v.length < 3) continue;
         if (!tokens.has(v)) tokens.set(v, new Set());
         tokens.get(v).add(r.platform);
       }
