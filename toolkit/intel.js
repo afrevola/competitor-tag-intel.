@@ -20,6 +20,7 @@ import { analyzeCost } from './lib/cost.js';
 import { analyzeShopify } from './lib/shopify.js';
 import { analyzeOptimization, summarizeFlags } from './lib/optimize.js';
 import { extractPricing } from './lib/pricing.js';
+import { analyzeExtras, diffExtras } from './lib/extras.js';
 import { analyzeRecording, recordingCsv } from './lib/recording.js';
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -141,6 +142,7 @@ function analyze(cap) {
   const optimization = analyzeOptimization(conversions, gtm);
   const flagSummary = summarizeFlags(conversions);
   const pricing = cap.promos?.pages ? extractPricing(cap.promos.pages) : [];
+  const extras = analyzeExtras(cap, conversions);
   const { domain, brand } = siteBrand(page.host);
   const libraries = adLibraryLinks({ domain, brand }, accountIds.map((p) => p.platform).concat(mediaMix.channels.flatMap((c) => c.vendors.map((v) => v.name))));
   if (cost) delete cost.fmt;
@@ -150,6 +152,7 @@ function analyze(cap) {
     shopify,
     optimization,
     pricing,
+    extras,
     containers: containerSummary,
     googleTags: page.containers.filter((c) => !/^GTM-/.test(c.id)).map((c) => c.id),
     launch: launch ? { property: launch.property, built: launch.buildInfo?.buildDate || null, rules: launch.rules.length, dataElements: launch.dataElements.length, extensions: launch.extensions.map((e) => e.name) } : null,
@@ -187,12 +190,29 @@ function reportMd(R) {
     ['Read', R.mediaMix.notes.join('; ') || '—'],
     ['Agency signals', R.mediaMix.agencies.map((a) => a.name).join(', ') || 'none'],
     ['Optimizes to', R.optimization?.headline || '—'],
+    ['Headline', R.extras?.messaging?.h1?.[0] || R.extras?.messaging?.title || '—'],
+    ['Experiments running', R.extras?.experiments?.length ? R.extras.experiments.slice(0, 4).map((e) => `${e.tool}: ${e.name}`).join('; ') + (R.extras.experiments.length > 4 ? ` (+${R.extras.experiments.length - 4})` : '') : 'none visible'],
+    ['Ratings', R.extras?.ratings?.length ? R.extras.ratings.slice(0, 2).map((r) => `${r.name}: ${r.rating}/${r.best}${r.count ? ` (${r.count.toLocaleString('en-US')} reviews)` : ''}`).join('; ') : '—'],
     ['Pricing', R.pricing?.length ? R.pricing.slice(0, 2).map((pg) => pg.tiers.slice(0, 5).map((t) => `${t.name} ${t.price}${t.unit ? '/' + t.unit.replace(/ \/ /g, '/') : ''}`).join(', ')).join(' · ') : 'no pricing page read'],
     ['Conversion tags', `${R.conversions.active} active, ${R.conversions.flagged} flagged`],
     ['Server-side signals', R.serverSide.map((f) => f.signal).join('; ') || 'none detected'],
     ['Promos', R.promos ? `${R.promos.offers.filter((o) => o.status === 'active').length} active, ${R.promos.offers.filter((o) => o.status === 'upcoming').length} upcoming; fiscal tags: ${R.promos.fiscalPeriods.join(', ') || '—'}` : 'not scanned'],
     ['Tracking cost', R.cost ? `${R.cost.shares.marketingRequests}% of requests, ${kb(R.cost.totals.marketing.jsBytes)} of tracking JavaScript${R.cost.shares.marketingJs != null ? ` (${R.cost.shares.marketingJs}% of all JS)` : ''}` : '—'],
   ]);
+  const X = R.extras || {};
+  if (X.messaging) {
+    const M = X.messaging;
+    s += `\n## Messaging\n\n` + md.table(['', ''], [
+      ['Page title', M.title || '—'],
+      ['Description', (M.description || '—').slice(0, 200)],
+      ['Headline (H1)', (M.h1 || []).join(' | ') || '—'],
+      ['Subheads (H2)', (M.h2 || []).slice(0, 8).join(' | ') || '—'],
+      ['Calls to action', (M.ctas || []).slice(0, 15).join(' · ') || '—'],
+      ['Announcement bar', M.announcement || '—'],
+      ['Sign-up / first-order offer', (M.signupOffers || []).join('; ') || 'none found in the page'],
+    ]);
+  }
+  if (X.experiments?.length) s += `\n## Experiments running\n\n` + md.table(['Tool', 'Test', 'Variant this visit saw'], X.experiments.map((e) => [e.tool, e.name, e.variant || '—']));
   s += `\n## Media mix\n\n` + md.table(['Channel', 'Vendors'], R.mediaMix.channels.map((c) => [c.channel, c.vendors.map((v) => v.name).join(', ')]));
   if (R.mediaMix.syncPartners?.length) s += `\n_Cookie-sync partners (ID-matching pixels fired by their ad vendors; not bought directly): ${R.mediaMix.syncPartners.join(', ')}._\n`;
   if (R.mediaMix.agencies.length) s += `\n**Agency signals**\n\n` + R.mediaMix.agencies.map((a) => `- **${a.name}**: ${a.evidence[0]}`).join('\n') + '\n';
@@ -242,8 +262,24 @@ function reportMd(R) {
     if (P.campaignFolders.length) s += `\n**Campaign asset folders**\n\n` + md.table(['Folder', 'Tokens', 'Files'], P.campaignFolders.slice(0, 15).map((f) => [f.folder, f.tokens.join(', '), `${f.fileCount}: ${f.files.slice(0, 3).join(', ')}`]));
     if (P.recent.length) s += `\n**Recently updated pages (sitemap)**\n\n` + P.recent.slice(0, 12).map((r) => `- ${r.lastmod.slice(0, 10)} ${r.url}`).join('\n') + '\n';
   }
+  if (X.landingPages || X.campaignTokens?.length) {
+    const L = X.landingPages || {};
+    s += `\n## Landing pages & campaigns\n\n`;
+    if (L.count) s += `${L.count} landing-page style URLs in the sitemap sample. Folders: ${L.folders.map(([f, n]) => `\`${f}\` (${n})`).join(', ')}.\n\nExamples: ${L.examples.slice(0, 10).map((e) => `\`${e}\``).join(', ')}\n\n`;
+    if (L.hiddenFromSearch?.length) s += `Kept out of search engines (robots.txt), often paid landing pages: ${L.hiddenFromSearch.map((e) => `\`${e}\``).join(', ')}\n\n`;
+    if (X.campaignTokens?.length) s += `**Campaign names and URL patterns their tags check for**\n\n` + md.table(['Pattern', 'Used by'], X.campaignTokens.map((t) => [t.token, t.platforms.join(', ')]));
+    if (!L.count && !L.hiddenFromSearch?.length && !X.campaignTokens?.length) s += 'None found.\n';
+  }
+  if (X.footprint?.sitemapUrls || X.locales?.length || X.ratings?.length || X.social?.length) {
+    s += `\n## Site footprint, reviews & social\n\n`;
+    if (X.footprint?.sitemapUrls) s += `Sitemap: ${X.footprint.sitemapUrls.toLocaleString('en-US')} URLs read. Biggest sections: ${X.footprint.sections.map(([f, n]) => `/${f} (${n.toLocaleString('en-US')})`).join(', ')}.\n\n`;
+    if (X.locales?.length) s += `Language / country versions (${X.locales.length}): ${X.locales.join(', ')}\n\n`;
+    if (X.ratings?.length) s += md.table(['Rated item', 'Type', 'Rating', 'Reviews'], X.ratings.map((r) => [r.name, r.type, `${r.rating} / ${r.best}`, r.count ? r.count.toLocaleString('en-US') : '—'])) + '\n';
+    if (X.social?.length) s += `Profiles the site lists: ${X.social.join(', ')}\n`;
+  }
   if (R.cost) {
     const C = R.cost;
+
     s += `\n## Third-party cost (this page load)\n\n` + md.table(['Bucket', 'Requests', 'Transferred', 'JavaScript'], [
       ['First-party', C.totals.first.requests, kb(C.totals.first.bytes), kb(C.totals.first.jsBytes)],
       ['Marketing & tag managers', C.totals.marketing.requests, kb(C.totals.marketing.bytes), kb(C.totals.marketing.jsBytes)],
@@ -403,11 +439,25 @@ function storePull(capFile, root, date) {
   fs.writeFileSync(path.join(dir, 'capture.json.gz'), zlib.gzipSync(JSON.stringify(cap)));
   fs.writeFileSync(path.join(dir, 'report.json'), JSON.stringify(R, null, 1));
   fs.writeFileSync(path.join(dir, 'report.md'), reportMd(R));
+  const files = ['capture.json.gz', 'report.json', 'report.md'];
+  if (cap.promos?.sitemapPaths?.length) { fs.writeFileSync(path.join(dir, 'sitemap.txt'), cap.promos.sitemapPaths.join('\n') + '\n'); files.push('sitemap.txt'); }
   const entries = loadIndex(root).filter((e) => e.path !== rel);
   const prev = entries.filter((e) => e.site === R.site).sort((a, b) => b.date.localeCompare(a.date))[0] || null;
   entries.push(pullSummary(R, rel, rel.split('/').pop()));
   writeIndex(root, entries);
-  return { R, rel, prev, files: ['capture.json.gz', 'report.json', 'report.md'].map((f) => rel + '/' + f).concat(['index.json', 'INDEX.md']) };
+  return { R, rel, prev, files: files.map((f) => rel + '/' + f).concat(['index.json', 'INDEX.md']) };
+}
+// Pages in the newer sitemap that weren't in the older one, grouped by folder
+function newPagesMd(oldFile, newFile) {
+  if (!fs.existsSync(oldFile) || !fs.existsSync(newFile)) return '';
+  const read = (f) => fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => l.split('\t')[0]);
+  const before = new Set(read(oldFile));
+  const added = read(newFile).filter((p) => !before.has(p));
+  if (!added.length) return '\n## New pages\n\nNo new pages in the sitemap sample.\n';
+  const by = {};
+  for (const p of added) (by['/' + (p.split('/').filter(Boolean)[0] || '')] ||= []).push(p);
+  return `\n## New pages (${added.length})\n\n` + Object.entries(by).sort((a, b) => b[1].length - a[1].length).slice(0, 12)
+    .map(([f, l]) => `- **${f}** (${l.length}): ${l.slice(0, 8).map((x) => '`' + x + '`').join(', ')}${l.length > 8 ? ', …' : ''}`).join('\n') + '\n';
 }
 function rebuildIndex(root) {
   const entries = [];
@@ -449,6 +499,8 @@ function diffReports(A, B) {
   if (ol.length) sections.push('## Promos\n\n' + ol.join('\n'));
   const ma = A.cost?.totals?.marketing, mb = B.cost?.totals?.marketing;
   if (ma && mb && (ma.requests !== mb.requests)) sections.push(`## Tracking weight\n\n- Marketing requests per page load: ${ma.requests} → ${mb.requests}`);
+  const xd = diffExtras(A.extras, B.extras);
+  if (xd) sections.push(xd);
   return `# ${B.site}: changes from ${(A.capturedAt || '').slice(0, 10)} to ${(B.capturedAt || '').slice(0, 10)}\n\n` + (sections.join('\n\n') || 'No changes in containers, vendors, accounts, conversions, server-side signals, promos or tracking weight.') + '\n';
 }
 
@@ -506,7 +558,12 @@ if (cmd === 'extract') {
   const root = opt('--root', null) || die('usage: store <capture.json[.gz]> --root <store dir> [--date YYYY-MM-DD]');
   const date = opt('--date', null);
   const r = storePull(rest[0] || die('usage: store <capture.json[.gz]> --root <dir>'), root, date);
-  if (r.prev) fs.writeFileSync(path.join(root, r.rel, 'changes.md'), diffReports(readJson(path.join(root, r.prev.path, 'report.json')), r.R)), r.files.push(r.rel + '/changes.md');
+  if (r.prev) {
+    let t = diffReports(readJson(path.join(root, r.prev.path, 'report.json')), r.R);
+    t += newPagesMd(path.join(root, r.prev.path, 'sitemap.txt'), path.join(root, r.rel, 'sitemap.txt'));
+    fs.writeFileSync(path.join(root, r.rel, 'changes.md'), t);
+    r.files.push(r.rel + '/changes.md');
+  }
   console.log(`stored ${r.R.site} -> ${path.join(root, r.rel)}${r.prev ? ` (changes since ${r.prev.date} in changes.md)` : ''}\nwritten:\n` + r.files.map((f) => '  ' + f).join('\n'));
 } else if (cmd === 'index') {
   const root = opt('--root', null) || die('usage: index --root <store dir>');
@@ -514,7 +571,8 @@ if (cmd === 'extract') {
 } else if (cmd === 'diff') {
   const out = opt('-o', null);
   if (rest.length < 2) die('usage: diff <old report.json> <new report.json> [-o changes.md]');
-  const t = diffReports(readJson(rest[0]), readJson(rest[1]));
+  let t = diffReports(readJson(rest[0]), readJson(rest[1]));
+  t += newPagesMd(path.join(path.dirname(rest[0]), 'sitemap.txt'), path.join(path.dirname(rest[1]), 'sitemap.txt'));
   if (out) { fs.writeFileSync(out, t); console.log('-> ' + out); } else console.log(t);
 } else {
   console.log(fs.readFileSync(new URL(import.meta.url), 'utf8').split('\n').slice(1, 10).join('\n'));

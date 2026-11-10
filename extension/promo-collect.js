@@ -156,6 +156,10 @@ export async function scanPromos(opts = {}) {
   const readPage = (html, finalUrl) => {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const meta = (sel) => doc.querySelector(sel)?.getAttribute('content') || '';
+    // Ratings and offers from the page's structured data (kept small)
+    const ld = [];
+    for (const sc of doc.querySelectorAll('script[type="application/ld+json"]')) { try { ld.push(JSON.parse(sc.textContent)); } catch {} }
+    const ldSmall = JSON.stringify(ld).length < 8000 ? ld : null;
     doc.querySelectorAll('script,style,noscript,header,footer,nav,[role=dialog],[aria-modal=true],.modal,iframe,svg').forEach((n) => n.remove());
     const main = doc.querySelector('main') || doc.body;
     const text = (main?.textContent || '').replace(/\s+/g, ' ').trim();
@@ -166,6 +170,7 @@ export async function scanPromos(opts = {}) {
       description: meta('meta[name="description"]') || meta('meta[property="og:description"]'),
       h1: [...doc.querySelectorAll('h1')].map((h) => h.textContent.trim()).filter(Boolean).slice(0, 3),
       h2: [...doc.querySelectorAll('h2,h3')].map((h) => h.textContent.trim()).filter(Boolean).slice(0, 10),
+      ld: ldSmall,
       text: text.slice(0, /pricing|plans?\b|membership|tickets?|pass(es)?\b|rates?\b/i.test(finalUrl) ? 15000 : 6000),
     };
   };
@@ -196,6 +201,9 @@ export async function scanPromos(opts = {}) {
     candidates: cands.size,
     uniqueOffers: byOffer.size,
     recent,
+    // Sitemap paths (newest first, capped) so later pulls can list new pages
+    sitemapPaths: [...urls.entries()].sort((a, b) => String(b[1] || '').localeCompare(String(a[1] || ''))).slice(0, 8000)
+      .map(([u, lm]) => { try { return new URL(u).pathname + (lm ? '\t' + String(lm).slice(0, 10) : ''); } catch { return null; } }).filter(Boolean),
     pages,
     currentPage: { url: location.href, assets: assetsOf(document.documentElement.outerHTML) },
   };

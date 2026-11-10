@@ -149,6 +149,68 @@ await (async () => {
     };
   } catch {}
 
+  // ---- Experiments running now (testing tools that expose their live tests in the page) ----
+  const experiments = [];
+  try {
+    const o = window.optimizely;
+    if (o && typeof o.get === 'function') {
+      const st = o.get('state'), data = o.get('data');
+      const vm = st?.getVariationMap?.() || {};
+      for (const id of st?.getActiveExperimentIds?.() || []) experiments.push({ tool: 'Optimizely', name: data?.experiments?.[id]?.name || id, variant: vm[id]?.name || null });
+    }
+  } catch {}
+  try { if (window._vwo_exp) for (const [id, e] of Object.entries(window._vwo_exp)) if (e && (e.status === 'RUNNING' || e.ready)) experiments.push({ tool: 'VWO', name: e.name || id, variant: e.combination_chosen && e.comb_n ? e.comb_n[e.combination_chosen] || null : null }); } catch {}
+  try { const r = window.ABTasty?.results; if (r) for (const [id, e] of Object.entries(r)) experiments.push({ tool: 'AB Tasty', name: e.name || id, variant: e.variationName || null }); } catch {}
+  try { const c = window.convert?.currentData?.experiments; if (c) for (const [id, e] of Object.entries(c)) experiments.push({ tool: 'Convert', name: e.experiment_name || e.name || id, variant: e.variation_name || null }); } catch {}
+  try { const k = window.Kameleoon?.API?.Experiments?.getActive?.(); if (k) for (const e of k) experiments.push({ tool: 'Kameleoon', name: e.name || e.id, variant: e.associatedVariation?.name || null }); } catch {}
+  try {
+    const ig = window.igData || window.Intelligems;
+    if (ig) {
+      const t = ig.tests || ig.activeTests || ig.user?.tests || ig.experiences;
+      if (t && typeof t === 'object' && Object.keys(t).length) for (const [id, e] of Object.entries(t)) experiments.push({ tool: 'Intelligems', name: e?.name || id, variant: e?.variation?.name || e?.variationName || null });
+      else experiments.push({ tool: 'Intelligems', name: '(running; test names not exposed)', variant: null });
+    }
+  } catch {}
+  try { if (window.adobe?.target) experiments.push({ tool: 'Adobe Target', name: '(loaded; activity names not exposed)', variant: null }); } catch {}
+  try { if (window.monetateQ || window.monetate) experiments.push({ tool: 'Monetate', name: '(loaded; test names not exposed)', variant: null }); } catch {}
+
+  // ---- Messaging on this page ----
+  let messaging = null;
+  try {
+    const txt = (el) => (el?.textContent || '').replace(/\s+/g, ' ').trim();
+    // Visible text only (skips hidden menus, drawers and style blocks); repeated marquee text is kept once
+    const vis = (el) => !!el && (typeof el.checkVisibility === 'function' ? el.checkVisibility() : el.offsetParent !== null);
+    const said = (el) => {
+      let t = (el?.innerText || '').replace(/\s+/g, ' ').trim();
+      const half = t.slice(0, Math.floor(t.length / 2)).trim();
+      if (half && t.split(half).length > 2) t = half;
+      return t;
+    };
+    const meta = (q) => document.querySelector(q)?.getAttribute('content') || '';
+    const ctas = [...new Set([...document.querySelectorAll('a,button')]
+      .filter((e) => (e.tagName === 'BUTTON' || /btn|button|cta/i.test(String(e.className || '') + ' ' + (e.getAttribute('role') || ''))) && vis(e))
+      .map(said).filter((t) => t.length > 1 && t.length < 40))].slice(0, 25);
+    const body = (document.body?.textContent || '').replace(/\s+/g, ' ');
+    const offerRe = /(?:get|save|take|enjoy|unlock|receive)?\s*(?:\d{1,2}\s?%|[$£€]\s?\d+)\s*off\s*(?:your\s*)?(?:first|next|1st)\s*(?:order|purchase|box|month|booking|visit)[^.!<>{}]{0,40}/gi;
+    messaging = {
+      title: document.title || '',
+      description: meta('meta[name="description"]') || meta('meta[property="og:description"]'),
+      h1: [...document.querySelectorAll('h1')].filter(vis).map(said).filter(Boolean).slice(0, 3),
+      h2: [...document.querySelectorAll('h2')].filter(vis).map(said).filter(Boolean).slice(0, 12),
+      ctas,
+      announcement: said(document.querySelector('[class*="announcement"],[id*="announcement"],[class*="promo-bar"],[class*="promobar"],[class*="top-bar"],[class*="topbar"],[class*="banner-bar"]')).slice(0, 200),
+      signupOffers: [...new Set((body.match(offerRe) || []).map((x) => x.trim()))].slice(0, 5),
+    };
+  } catch {}
+
+  // ---- Structured data and language versions ----
+  const structured = [];
+  for (const sc of document.querySelectorAll('script[type="application/ld+json"]')) {
+    try { structured.push(JSON.parse(sc.textContent)); } catch {}
+    if (JSON.stringify(structured).length > 60000) break;
+  }
+  const hreflang = [...document.querySelectorAll('link[rel="alternate"][hreflang]')].map((l) => [l.getAttribute('hreflang'), l.href]).slice(0, 80);
+
   // ---- Shopify: app pixels configured in Shopify (webPixelsConfigList) and theme app embeds ----
   let shopify = null;
   try {
@@ -189,6 +251,10 @@ await (async () => {
     url: location.href,
     host: location.hostname,
     shopify,
+    experiments,
+    messaging,
+    structured,
+    hreflang,
     containers: [...found].map(([id, src]) => ({ id, src })),
     dataLayers,
     launch,
@@ -349,6 +415,10 @@ await (async () => {
   const readPage = (html, finalUrl) => {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const meta = (sel) => doc.querySelector(sel)?.getAttribute('content') || '';
+    // Ratings and offers from the page's structured data (kept small)
+    const ld = [];
+    for (const sc of doc.querySelectorAll('script[type="application/ld+json"]')) { try { ld.push(JSON.parse(sc.textContent)); } catch {} }
+    const ldSmall = JSON.stringify(ld).length < 8000 ? ld : null;
     doc.querySelectorAll('script,style,noscript,header,footer,nav,[role=dialog],[aria-modal=true],.modal,iframe,svg').forEach((n) => n.remove());
     const main = doc.querySelector('main') || doc.body;
     const text = (main?.textContent || '').replace(/\s+/g, ' ').trim();
@@ -359,6 +429,7 @@ await (async () => {
       description: meta('meta[name="description"]') || meta('meta[property="og:description"]'),
       h1: [...doc.querySelectorAll('h1')].map((h) => h.textContent.trim()).filter(Boolean).slice(0, 3),
       h2: [...doc.querySelectorAll('h2,h3')].map((h) => h.textContent.trim()).filter(Boolean).slice(0, 10),
+      ld: ldSmall,
       text: text.slice(0, /pricing|plans?\b|membership|tickets?|pass(es)?\b|rates?\b/i.test(finalUrl) ? 15000 : 6000),
     };
   };
@@ -389,6 +460,9 @@ await (async () => {
     candidates: cands.size,
     uniqueOffers: byOffer.size,
     recent,
+    // Sitemap paths (newest first, capped) so later pulls can list new pages
+    sitemapPaths: [...urls.entries()].sort((a, b) => String(b[1] || '').localeCompare(String(a[1] || ''))).slice(0, 8000)
+      .map(([u, lm]) => { try { return new URL(u).pathname + (lm ? '\t' + String(lm).slice(0, 10) : ''); } catch { return null; } }).filter(Boolean),
     pages,
     currentPage: { url: location.href, assets: assetsOf(document.documentElement.outerHTML) },
   };

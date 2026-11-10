@@ -8,6 +8,11 @@ Competitive ad-ops and marketing intel from any public website, in any industry 
 - **Pricing:** plan, tier, pass and ticket tables from pricing, plans, membership and ticket pages, with billing notes (annual discount, free trial, group discounts).
 - **Conversion map:** what each ad platform is told counts as a conversion and the value sent. Flags duplicates, fixed values, missing values, values scraped from page text, and page visits counted as conversions.
 - **Shopify stores:** reads the pixels and conversions set up inside Shopify (Google & YouTube, Meta, TikTok, AppLovin, affiliate and other app pixels), which never appear in a tag manager, plus the store's theme and installed theme apps.
+- **Messaging:** the page's headline, subheads, calls to action, announcement bar and sign-up offer.
+- **Experiments running:** live tests from Optimizely, VWO, AB Tasty, Convert, Kameleoon, Intelligems and data-layer experiment events (or that Adobe Target / Monetate is running).
+- **Landing pages & campaigns:** landing-page folders in the sitemap, folders kept out of search engines, and the campaign names and URL patterns their tags check for.
+- **Site footprint, reviews & social:** sitemap size by section, language/country versions, ratings and review counts from structured data, and the social profiles the site lists.
+- **Changes between pulls:** new pages in the sitemap, plus headline, announcement, offer, call-to-action, experiment, rating and locale changes.
 - **Server-side tracking:** server GTM containers, first-party collection endpoints, Conversions API and enhanced-conversions signals.
 - **Offer calendar:** deals, sales, pricing and plan pages, financing, trials, referral and loyalty programs from the sitemap, with dates, headline prices (any currency) and status. The same offer on many store or city pages becomes one row. Plus campaign asset folders.
 - **Tracking cost:** requests, bytes and JavaScript added by marketing tags compared with the site itself.
