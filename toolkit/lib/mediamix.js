@@ -41,11 +41,23 @@ export function buildMediaMix({ page, gtm = [], launch = null, extraUrls = [] })
     if (/^G-/.test(c.id)) add('GA4', 'page');
   }
   const urls = [...(page?.network?.urls || []), ...(page?.network?.scripts || []), ...extraUrls];
+  // Cookie-sync / ID-match pixels: ad-tech partners of the site's own DSPs firing ID swaps. They show who
+  // the site's vendors trade data with, not what the site buys, so they're listed apart from the media mix.
+  const SYNC = /\/(cm|cms|usersync|user-?sync|getuid|setuid|sync|syncs|match|cookie-?sync|idsync|ups|sum|um|pug|rum|dcm|bounce|xuid|mapuid)(\/|\?|$)|[?&](piggyback\w*|cm_dsp_id|gdpr_consent|external_user_id|redir|redirect)=|[?&](put|partner_uid|puid)=|\/tap\.php|\/\/(idsync|sync|usersync|cm|match|ups|pixel-sync|cs|eb2)[.-]|csync|cookiematch|ums\./i;
   for (const u of urls) {
-    let host = '';
-    try { host = new URL(u).hostname; } catch {}
-    detectVendors(host + new URL(u, 'https://x').pathname + ' ' + u.slice(0, 300)).forEach((v) => add(v, extraUrls.includes(u) ? 'recording' : 'network'));
+    let host = '', pathname = '';
+    try { const x = new URL(u, 'https://x'); host = x.hostname; pathname = x.pathname; } catch {}
+    const where = extraUrls.includes(u) ? 'recording' : 'network';
+    if (SYNC.test(u) && !(page?.network?.scripts || []).includes(u)) {
+      detectVendors(host).forEach((v) => add(v, 'cookie sync'));
+      const partner = (pathname.match(/\/cm\/([a-z0-9_-]+)\/(?:out|in)\b/i) || [])[1]; // e.g. d.adroll.com/cm/taboola/out
+      if (partner) detectVendors(partner + ' ' + partner + '.com').forEach((v) => add(v, 'cookie sync'));
+    }
+    else detectVendors(host + pathname).forEach((v) => add(v, where));
   }
+  const syncPartners = [];
+  for (const [name, where] of [...vendors]) if (where.size === 1 && where.has('cookie sync')) { syncPartners.push(name); vendors.delete(name); }
+  syncPartners.sort();
 
   const byChannel = {};
   for (const [name, where] of vendors) {
@@ -78,7 +90,11 @@ export function buildMediaMix({ page, gtm = [], launch = null, extraUrls = [] })
   if (count('CDP & Data')) notes.push(`CDP/data layer: ${byChannel['CDP & Data'].map((v) => v.name).join(', ')}`);
   if (count('Email & CRM')) notes.push(`CRM: ${byChannel['Email & CRM'].map((v) => v.name).join(', ')}`);
   if (count('Affiliate & Partners')) notes.push(`affiliate/partner tracking (${byChannel['Affiliate & Partners'].map((v) => v.name).join(', ')})`);
+  if (count('B2B & ABM')) notes.push(`B2B account-based marketing / intent data: ${byChannel['B2B & ABM'].map((v) => v.name).join(', ')}`);
+  if (count('Ad Monetization')) notes.push(`sells ad space on its own site (${byChannel['Ad Monetization'].map((v) => v.name).join(', ')})`);
+  if (count('Payments & Financing')) notes.push(`payments / buy-now-pay-later: ${byChannel['Payments & Financing'].map((v) => v.name).join(', ')}`);
+  if (count('Site Platform')) notes.push(`site platform: ${byChannel['Site Platform'].map((v) => v.name).join(', ')}`);
   if (count('Attribution')) notes.push(`third-party attribution: ${byChannel['Attribution'].map((v) => v.name).join(', ')}`);
 
-  return { channels, agencies, notes, total: vendors.size };
+  return { channels, agencies, notes, total: vendors.size, syncPartners };
 }

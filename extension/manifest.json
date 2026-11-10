@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Tag Inspector (GTM + Adobe Launch)",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "Competitive ad-ops intel: tags, conversions, ad accounts, media mix, data layers, server-side tracking and a funnel recorder.",
   "action": {
     "default_popup": "popup.html",

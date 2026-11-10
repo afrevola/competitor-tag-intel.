@@ -44,7 +44,12 @@ export function analyzeCost(page) {
     let vendor = null, channel = null, bucket;
     const infra = INFRA.find(([, re]) => re.test(r.u));
     const mk = detectVendors(host + new URL(r.u).pathname + ' ' + r.u.slice(0, 200))[0];
-    if (mk) { vendor = mk; channel = channelOf(mk); bucket = 'marketing'; }
+    // Site platform, payments and chat are part of running the site, not marketing
+    const SITE_SIDE = /^(Site Platform|Payments & Financing|Chat & Support)$/;
+    if (mk && SITE_SIDE.test(channelOf(mk))) {
+      if (first) { bucket = 'first'; vendor = 'First-party (' + own + ')'; channel = 'Site'; }
+      else { vendor = mk; channel = channelOf(mk); bucket = 'infra'; }
+    } else if (mk) { vendor = mk; channel = channelOf(mk); bucket = 'marketing'; }
     else if (infra) { vendor = infra[0]; channel = infra[2]; bucket = infra[2] === 'Tag management' ? 'marketing' : 'infra'; }
     else if (first) { bucket = 'first'; vendor = 'First-party (' + own + ')'; channel = 'Site'; }
     else { bucket = 'other3p'; vendor = site(host); channel = 'Other third-party'; }

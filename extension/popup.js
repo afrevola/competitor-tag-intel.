@@ -437,6 +437,7 @@ VIEWS.overview = {
     $('#summary').innerHTML =
       `<b>${this.mix.total}</b> marketing vendors across <b>${this.mix.channels.length}</b> channels · <b>${this.ids.reduce((s, p) => s + p.ids.length, 0)}</b> account / pixel IDs` +
       (this.mix.notes.length ? `<div class="note" style="margin-top:4px;color:var(--fg)">${esc(this.mix.notes.join(' · '))}</div>` : '') +
+      (this.mix.syncPartners?.length ? `<div class="note">Cookie-sync partners (fired by their ad vendors, not bought directly): ${esc(this.mix.syncPartners.join(', '))}</div>` : '') +
       (state.recAnalysis ? '<div class="note">Includes vendors seen in this tab\'s recording.</div>' : '<div class="note">Based on the tag containers and this page load. Record a funnel to catch vendors that only load on later steps.</div>') +
       (failed.length ? `<div class="note" style="color:var(--warn)">Couldn't download ${esc(failed.join(', '))}.</div>` : '');
     toolbar({ filter: false, actions: '<button id="json">JSON</button>' });
@@ -680,13 +681,14 @@ VIEWS.promos = {
     }
     const offers = A.offers.filter((o) => matches(o, q));
     $('#list').innerHTML = offers.length ? offers.map((o) => `<details>
-        <summary><span class="v ${STATUS_CLASS[o.status] || 'info'}">${esc(o.status)}</span><span class="type">${esc(o.name)}</span>
+        <summary><span class="v ${STATUS_CLASS[o.status] || 'info'}">${esc(o.status)}</span><span class="type">${esc(o.name)}</span>${o.copies > 1 ? `<span class="chip" title="${esc((o.variants || []).join(', '))}">×${o.copies}</span>` : ''}
           <span class="meta">${o.start || o.end ? esc(fmtDate(o.start) + ' – ' + fmtDate(o.end)) : ''}</span>
           <div class="sub">${esc([o.prices.join(' / '), o.percentOff.join(' '), o.free ? 'free' : ''].filter(Boolean).join(' · ') || o.summary)}</div></summary>
         <div class="body">
           ${o.summary ? `<h4>Offer</h4><div>${esc(o.summary)}</div>` : ''}
           ${o.dateText.length ? `<h4>Dates found</h4><ul>${o.dateText.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>` : ''}
           ${o.restriction ? `<h4>Restrictions</h4><div>${esc(o.restriction)}</div>` : ''}
+          ${o.variants ? `<h4>Same offer on ${o.copies} pages</h4><div>${esc(o.variants.join(', '))}</div>` : ''}
           ${o.redirectedTo ? `<h4>Redirects to</h4><div>${esc(o.redirectedTo)}</div>` : ''}
           <h4>Page</h4><div><a target="_blank" href="${esc(o.url)}">${esc(o.url)}</a>${o.lastmod ? ` · sitemap lastmod ${esc(o.lastmod.slice(0, 10))}` : ''}</div>
         </div></details>`).join('') : '<div class="empty">No promo pages found.</div>';

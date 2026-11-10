@@ -7,7 +7,7 @@ const PURCHASE_TRIGGER = /purchase|complet|confirm|thank|order|success|paid|paym
 const LEAD_EVENT = /lead|submit|sign_?up|subscribe|register|contact|form|request|schedule/i;
 const PAGE_EVENTS = /^(gtm\.js|gtm\.dom|gtm\.load|gtm\.init|gtm\.historyChange|pageview|page_view|OneTrustGroupsUpdated|OneTrustLoaded|OptanonLoaded)$/i;
 const triggerEvents = (f) => [...f.matchAll(/\{\{Event\}\} (?:equals|matches RegEx|contains) (\S+)/g)].map((m) => m[1]);
-const urlConds = (f) => [...f.replace(/NOT \([^)]*\)\)?/g, '').matchAll(/\{\{(?:Page (?:Url|URL|Path|Host)|Custom JS #\d+)\}\} (?:contains|equals|matches RegEx|starts with) (\S+)/g)].map((m) => m[1]).filter((x) => !/topgolf\b|staging|dev/.test(x));
+const urlConds = (f) => [...f.replace(/NOT \([^)]*\)\)?/g, '').matchAll(/\{\{(?:Page (?:Url|URL|Path|Host)|Custom JS #\d+)\}\} (?:contains|equals|matches RegEx|starts with) (\S+)/g)].map((m) => m[1]).filter((x) => !/^(?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+\/?$|staging|\bdev\b/.test(x)); // skip bare host / environment checks
 
 const CALL_FNS = { fbq: 'Meta Pixel', snaptr: 'Snapchat', pintrk: 'Pinterest', rdt: 'Reddit', twq: 'Twitter / X', clq: 'Clinch', oaiq: 'OpenAI (oaiq)', qp: 'Quora', ndp: 'Nextdoor', lintrk: 'LinkedIn', spdt: 'Spotify Ads', saq: 'StackAdapt' };
 const VALUE_IN_OBJ = /(?:^|[,{\s])["']?(value|price|revenue|conv_value|event_value|revenue_value|amount|total|tw_sale_amount|gv)["']?\s*:\s*([^,}\n]+)/;

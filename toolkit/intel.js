@@ -181,6 +181,7 @@ function reportMd(R) {
     ['Tracking cost', R.cost ? `${R.cost.shares.marketingRequests}% of requests, ${kb(R.cost.totals.marketing.jsBytes)} of tracking JavaScript${R.cost.shares.marketingJs != null ? ` (${R.cost.shares.marketingJs}% of all JS)` : ''}` : '—'],
   ]);
   s += `\n## Media mix\n\n` + md.table(['Channel', 'Vendors'], R.mediaMix.channels.map((c) => [c.channel, c.vendors.map((v) => v.name).join(', ')]));
+  if (R.mediaMix.syncPartners?.length) s += `\n_Cookie-sync partners (ID-matching pixels fired by their ad vendors; not bought directly): ${R.mediaMix.syncPartners.join(', ')}._\n`;
   if (R.mediaMix.agencies.length) s += `\n**Agency signals**\n\n` + R.mediaMix.agencies.map((a) => `- **${a.name}**: ${a.evidence[0]}`).join('\n') + '\n';
   s += `\n## Ad accounts & pixel IDs\n\n` + md.table(['Platform', 'IDs'], R.accountIds.map((p) => [p.platform, p.ids.map((i) => i.id).join(', ')]));
   s += `\nAd libraries: ` + R.adLibraries.map((l) => `[${l.name}](${l.url})`).join(' · ') + '\n';
@@ -191,7 +192,7 @@ function reportMd(R) {
   if (R.promos) {
     const P = R.promos;
     s += `\n## Promos & campaigns\n\nRead ${P.pagesRead} promo pages (${P.candidates} candidates; sitemap has ${P.sitemapUrlCount} URLs).\n\n`;
-    if (P.offers.length) s += md.table(['Offer', 'Status', 'Dates', 'Prices', 'Restriction', 'URL'], P.offers.map((o) => [o.name, o.status, o.start || o.end ? `${o.start || '…'} → ${o.end || '…'}` : '', [...o.prices, ...o.percentOff].join(' '), o.restriction || '', o.url]));
+    if (P.offers.length) s += md.table(['Offer', 'Status', 'Dates', 'Prices', 'Restriction', 'URL'], P.offers.map((o) => [o.name + (o.copies > 1 ? ` (×${o.copies}${o.variants ? ': ' + o.variants.slice(0, 6).join(', ') + (o.variants.length > 6 ? ', …' : '') : ''})` : ''), o.status, o.start || o.end ? `${o.start || '…'} → ${o.end || '…'}` : '', [...o.prices, ...o.percentOff].join(' '), o.restriction || '', o.url]));
     if (P.campaignFolders.length) s += `\n**Campaign asset folders**\n\n` + md.table(['Folder', 'Tokens', 'Files'], P.campaignFolders.slice(0, 15).map((f) => [f.folder, f.tokens.join(', '), `${f.fileCount}: ${f.files.slice(0, 3).join(', ')}`]));
     if (P.recent.length) s += `\n**Recently updated pages (sitemap)**\n\n` + P.recent.slice(0, 12).map((r) => `- ${r.lastmod.slice(0, 10)} ${r.url}`).join('\n') + '\n';
   }
@@ -380,7 +381,7 @@ function diffReports(A, B) {
   const ids = (R) => new Set(R.accountIds.flatMap((p) => p.ids.map((i) => `${p.platform} ${i.id}`)));
   const convs = (R) => new Set(R.conversions.rows.filter((r) => !r.paused).map((r) => `${r.platform} ${r.account || ''} · ${r.event} · value ${r.value ?? '—'}`));
   const sst = (R) => new Set(R.serverSide.filter((x) => x.verdict === 'yes').map((x) => x.signal));
-  const offers = (R) => new Map((R.promos?.offers || []).map((o) => [o.name, `${o.status}${o.start || o.end ? ` (${o.start || '?'} → ${o.end || '?'})` : ''}${o.prices?.length ? ' ' + o.prices.join('/') : ''}`]));
+  const offers = (R) => new Map((R.promos?.offers || []).map((o) => [o.key || o.name, { label: o.name, v: `${o.status}${o.start || o.end ? ` (${o.start || '?'} → ${o.end || '?'})` : ''}${o.prices?.length ? ' ' + o.prices.join('/') : ''}${o.copies > 1 ? ` ×${o.copies}` : ''}` }]));
   const conts = (R) => new Map(R.containers.map((c) => [c.id, c]));
   const sections = [];
   const add = (title, d) => { if (d.added.length || d.removed.length) sections.push(`## ${title}\n\n${d.added.map((x) => '- **Added:** ' + x).join('\n')}${d.added.length && d.removed.length ? '\n' : ''}${d.removed.map((x) => '- **Removed:** ' + x).join('\n')}`); };
@@ -397,8 +398,8 @@ function diffReports(A, B) {
   add('Conversion tags', setDiff(convs(A), convs(B)));
   add('Server-side signals', setDiff(sst(A), sst(B)));
   const oa = offers(A), ob = offers(B), ol = [];
-  for (const [k, v] of ob) { if (!oa.has(k)) ol.push(`- **New offer:** ${k}: ${v}`); else if (oa.get(k) !== v) ol.push(`- **Changed:** ${k}: ${oa.get(k)} → ${v}`); }
-  for (const k of oa.keys()) if (!ob.has(k)) ol.push(`- **No longer found:** ${k}`);
+  for (const [k, b] of ob) { const a = oa.get(k); if (!a) ol.push(`- **New offer:** ${b.label}: ${b.v}`); else if (a.v !== b.v) ol.push(`- **Changed:** ${b.label}: ${a.v} → ${b.v}`); }
+  for (const [k, a] of oa) if (!ob.has(k)) ol.push(`- **No longer found:** ${a.label}`);
   if (ol.length) sections.push('## Promos\n\n' + ol.join('\n'));
   const ma = A.cost?.totals?.marketing, mb = B.cost?.totals?.marketing;
   if (ma && mb && (ma.requests !== mb.requests)) sections.push(`## Tracking weight\n\n- Marketing requests per page load: ${ma.requests} → ${mb.requests}`);

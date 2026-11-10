@@ -59,6 +59,28 @@ function cleanName(p) {
   return String(raw).split(/\s+[|–—-]\s+/)[0].trim().slice(0, 80);
 }
 
+const PRICE = /(?:US\$|C\$|A\$|[$£€¥₹])\s?\d{1,3}(?:[,.]\d{3})*(?:[.,]\d{2})?(?!\d)(?:\s?\/\s?(?:mo|month|yr|year|night|person|user|seat))?|\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?\s?(?:€|EUR|GBP|USD)\b/g;
+function shingles(text, drop = []) {
+  let words = String(text || '').toLowerCase().replace(/[^a-z0-9$%]+/g, ' ').split(' ').filter(Boolean);
+  if (drop.length) words = words.filter((w) => !drop.includes(w));
+  words = words.slice(0, 400);
+  const set = new Set();
+  for (let i = 0; i + 4 < words.length; i++) set.add(words.slice(i, i + 5).join(' '));
+  return set;
+}
+function jaccard(a, b) {
+  if (!a.size || !b.size) return 0;
+  let n = 0;
+  for (const x of a) if (b.has(x)) n++;
+  return n / (a.size + b.size - n);
+}
+// Words that name the store / city / branch in a page (from its URL and title), dropped before comparing text
+function variantWords(p) {
+  const fromUrl = (() => { try { return new URL(p.url).pathname.split('/').filter(Boolean).pop() || ''; } catch { return ''; } })();
+  return [...new Set((fromUrl + ' ' + (p.h1?.[0] || '') + ' ' + (p.title || '')).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2))];
+}
+function variantOf(o) { try { return new URL(o.url).pathname.split('/').filter(Boolean).pop() || ''; } catch { return ''; } }
+
 export function analyzePromos(scan, today = new Date()) {
   if (!scan) return null;
   const todayIso = today.toISOString().slice(0, 10);
@@ -68,8 +90,11 @@ export function analyzePromos(scan, today = new Date()) {
     if (!p.text && !p.redirectedTo) continue;
     const body = [p.description, ...(p.h2 || []), p.text].filter(Boolean).join(' . ');
     const dates = parseDates(body, refYear);
-    const prices = [...new Set((body.match(/\$\s?\d{1,3}(?:,\d{3})*(?:\.\d{2})?(?!\d)/g) || []).map((s) => s.replace(/\s/g, '')))].slice(0, 8);
-    const pct = [...new Set((body.match(/\d{1,2}%\s*off/gi) || []))].slice(0, 4);
+    const priceList = (t) => [...new Set((String(t || '').match(PRICE) || []).map((x) => x.replace(/\s+/g, ' ').trim()))];
+    // Headline prices come from the title, headings and description; the rest of the page is fine print
+    const headlinePrices = priceList([p.title, p.ogTitle, p.description, ...(p.h1 || []), ...(p.h2 || [])].join(' . ')).slice(0, 6);
+    const prices = headlinePrices.length ? headlinePrices : priceList(body).slice(0, 6);
+    const pct = [...new Set((body.match(/\d{1,2}\s?%\s*off|save\s+(?:up\s+to\s+)?\d{1,2}\s?%/gi) || []))].slice(0, 4);
     const free = /\bfree\b/i.test(body);
     const starts = dates.map((d) => d.start).filter(Boolean).sort();
     const ends = dates.map((d) => d.end).filter(Boolean).sort();
@@ -80,7 +105,7 @@ export function analyzePromos(scan, today = new Date()) {
     else if (end && end < todayIso) status = 'expired';
     else if (start && start > todayIso) status = 'upcoming';
     else if (start || end) status = 'active';
-    const restrict = (body.match(/[^.]{0,60}\b(except|excludes?|not valid|only on|mon(?:day)?s?-fri|weekdays?|after \d{1,2}\s?(?:am|pm)|before \d{1,2}\s?(?:am|pm)|participating locations)[^.]{0,80}/i) || [])[0];
+    const restrict = (body.match(/[^.]{0,60}\b(except|excludes?|exclusions|not valid|cannot be combined|only on|mon(?:day)?s?-fri|weekdays?|after \d{1,2}\s?(?:am|pm)|before \d{1,2}\s?(?:am|pm)|participating|new (?:customers|members|subscribers) only|first[- ]time|minimum (?:purchase|spend|order)|min\.? (?:spend|order)|while supplies last|limit (?:one|\d)|one per|in-store only|online only|subject to (?:credit )?approval|terms (?:and conditions )?apply|eligible)[^.]{0,80}/i) || [])[0];
     offers.push({
       name: cleanName(p), url: p.url, lastmod: p.lastmod || null, status,
       start, end, dateText: dates.map((d) => d.raw).slice(0, 4),
@@ -88,8 +113,44 @@ export function analyzePromos(scan, today = new Date()) {
       summary: (p.description || p.h2?.[0] || p.text || '').slice(0, 200),
       restriction: restrict ? restrict.trim().slice(0, 160) : null,
       redirectedTo: p.redirectedTo || null,
-      locationCopies: p.copies > 1 ? p.copies : null,
+      copies: p.copies > 1 ? p.copies : null,
+      variants: p.variants?.length > 1 ? p.variants : null,
+      _sig: shingles(body, variantWords(p)),
+      _names: [cleanName(p)],
+      _entities: p.variants?.length > 1 ? p.variants : [],
     });
+  }
+  // Pages with near-identical text are one offer (e.g. the same deal on each store's page)
+  const merged = [];
+  for (const o of offers) {
+    const parent = (x) => { try { return new URL(x.url).pathname.replace(/[^/]+\/?$/, ''); } catch { return ''; } };
+    // Same text, or same folder and largely the same text (per-store pages with local tweaks)
+    const same = merged.find((m) => m.status === o.status && (jaccard(m._sig, o._sig) >= 0.6 || (parent(m) === parent(o) && parent(o).length > 1 && jaccard(m._sig, o._sig) >= 0.3)));
+    if (!same) { merged.push(o); continue; }
+    same.copies = (same.copies || 1) + (o.copies || 1);
+    same._names.push(...o._names);
+    same._entities.push(...o._entities);
+    same.variants = [...new Set([...(same.variants || [variantOf(same)]), ...(o.variants || [variantOf(o)])])].filter(Boolean);
+    same.prices = [...new Set([...same.prices, ...o.prices])].slice(0, 6);
+    if (String(o.lastmod || '') > String(same.lastmod || '')) same.lastmod = o.lastmod;
+  }
+  offers.length = 0;
+  for (const o of merged) {
+    delete o._sig;
+    if (o.variants && o.variants.length < 2) o.variants = null;
+    // A grouped offer is named by what its pages share ("Oakbrook Promotions" + "Miami Promotions" → "Promotions")
+    const norm = (w) => w.toLowerCase().replace(/[^a-z0-9]/g, '');
+    let generic = o.name;
+    if (o._names.length > 1) {
+      const sets = o._names.map((n) => new Set(n.split(/\s+/).map(norm)));
+      generic = o.name.split(/\s+/).filter((w) => sets.every((st) => st.has(norm(w)))).join(' ');
+    }
+    generic = generic.replace(/^[-–|:,\s]+|[-–|:,\s]+$/g, '');
+    if (generic.length >= 3 && (generic.split(/\s+/).length >= 2 || o.name.split(/\s+/).length <= 2)) o.name = generic;
+    // Stable key for comparing pulls: the page's path, or its folder for an offer copied across pages
+    try { const pn = new URL(o.url).pathname; o.key = o.copies > 1 ? pn.replace(/[^/]+\/?$/, '*') : pn; } catch { o.key = o.name; }
+    delete o._names; delete o._entities;
+    offers.push(o);
   }
   const order = { active: 0, upcoming: 1, 'ongoing / no dates': 2, expired: 3, 'expired (page redirects)': 4 };
   offers.sort((a, b) => order[a.status] - order[b.status] || String(a.end || '9').localeCompare(String(b.end || '9')));

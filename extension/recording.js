@@ -3,7 +3,8 @@ import { decodeHit, isLibraryLoad } from './pixels.js';
 import { detectVendors } from './vendors.js';
 
 const SYSTEM = /^(gtm\.(js|dom|load|timer|scrollDepth|historyChange|init|init_consent|linkClick|click|formSubmit|elementVisibility|video)|OneTrust|Optanon|nextroll|consent)/;
-const VALUE_KEY = /^(value|revenue|price|total|subtotal|amount|totalReservationPrice|TotalReservationPrice|GameplayPrice|DepositAmount|UpgradePrice|tax|shipping|conversion_value|order_total|transactiontotal)$/i;
+// Any field that looks like money: value, price, total, amount, cost, fee, deposit, tax, shipping, discount, revenue (any casing/prefix, e.g. totalReservationPrice, cart_subtotal)
+const VALUE_KEY = /(^|[a-z_])(value|revenue|price|total|subtotal|amount|cost|fee|fees|deposit|tax|shipping|discount|premium|payment)$/i;
 
 export function dlLabel(e) {
   if (e && typeof e === 'object') {

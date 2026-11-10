@@ -18,7 +18,7 @@ Output per site: tag managers and containers, media mix by channel, agency finge
 
 ## One site
 
-Work in `work/<domain>/` (e.g. `work/topgolf.com/`).
+Work in `work/<domain>/` (e.g. `work/example.com/`). The skill works the same for any industry: retail and e-commerce, SaaS and B2B, travel, finance, automotive, healthcare, media and publishers, restaurants and venues, local services.
 
 1. **Open** the site's homepage (or the specific page the user named) in a new tab. Note the tab id.
 2. **Check the tab.** Run `location.host` in the tab and confirm it is the site you opened. Do this again before every later call in that tab: when several agents share one browser, a tab id can point at another agent's tab.
@@ -27,7 +27,7 @@ Work in `work/<domain>/` (e.g. `work/topgolf.com/`).
 4. **Extract.** `node tag-intel/intel.js extract <saved file> -o work/<domain>/capture.json --expect <domain>`. If it says parts are missing, check the tab's host again, run `__tiPart(1)`, `__tiPart(2)` … in that tab (each saves another file) and pass every file: `extract <part0> <part1> <part2> -o … --expect <domain>`. Parts can be in any order; every part carries its capture's ID and site, so extract refuses parts from a different capture or site.
 5. **Analyze and save.** If pulls are being saved, run `node tag-intel/intel.js store work/<domain>/capture.json --root <store root>`: it writes `pulls/<domain>/<date>/report.md`, `report.json` and `capture.json.gz`, updates `index.json` and `INDEX.md`, and, when an earlier pull of the site exists, writes `changes.md` (what changed since then). Then sync the files it lists (see *Saving pulls*). If pulls are not being saved, run `node tag-intel/intel.js analyze work/<domain>/capture.json -o work/<domain>` instead.
 6. **Close** the tab.
-7. **Report.** Read `report.md` (and `changes.md` if there is one) and lead with what is notable, including what changed since the last pull rather than restating every table: shared or unusual accounts, conversion flags, server-side setup, CTV or other channel signals, agency fingerprints, active and upcoming promos, and tracking weight. Offer the full report file.
+7. **Report.** Read `report.md` (and `changes.md` if there is one) and lead with what is notable, including what changed since the last pull rather than restating every table: shared or unusual accounts, conversion flags, server-side setup, CTV or other channel signals, agency fingerprints, site platform, B2B intent tools, ad monetization, buy-now-pay-later, active and upcoming offers, and tracking weight. Frame findings for the user's industry: an e-commerce brand cares about catalog and checkout tracking, a B2B company about lead forms and intent data, a publisher about ad monetization. Offer the full report file.
 
 **If something goes wrong.**
 - `holds a capture of <other site>`: the tab was showing a different site. Open a new tab, check `location.host`, capture again.
@@ -69,11 +69,11 @@ comparisons/<date>-<sites>/    comparison.md, .csv, .html
 - *Write back:* after `store`, write every file it listed with `device_commit_files`: `stagedPath` = `/mnt/user-data/outputs/intel-store/<file>`, `devicePath` = `<store folder>/<file>`.
 - If the computer isn't reachable, keep the pulls in the working copy, tell the user they weren't saved to their folder, and offer them as downloads.
 
-**Private GitHub repository.** Attach it with `add_repo` (access `push`) and clone it to `intel-store/`; that clone is the store root. After `store` (and any comparison), `git add -A`, commit with a message like `Pull: topgolf.com 2026-11-09`, and push. If the push is refused, tell the user the Claude GitHub app needs access to that repository.
+**Private GitHub repository.** Attach it with `add_repo` (access `push`) and clone it to `intel-store/`; that clone is the store root. After `store` (and any comparison), `git add -A`, commit with a message like `Pull: example.com 2026-11-09`, and push. If the push is refused, tell the user the Claude GitHub app needs access to that repository.
 
 ## Answering questions from saved pulls
 
-When the user asks about a competitor ("what does Topgolf's purchase tag send?", "what changed at Puttshack since last month?", "who uses The Trade Desk?"):
+When the user asks about a competitor ("what does their purchase tag send?", "what changed on their site since last month?", "which of these competitors use The Trade Desk?"):
 1. Read `INDEX.md` from the store first (stage it, or read it in the clone). Find the pulls that answer the question.
 2. Load only what's needed: `report.json` for accounts, vendors, conversions, promos and cost; `capture.json.gz` for anything deeper (full GTM container code, tag parameters, data layer pushes, network requests, cookies, promo page text). Read it with `zcat` or `node -e` plus `zlib`; `node tag-intel/intel.js analyze <capture.json.gz>` re-runs the analysis with the current toolkit.
 3. For change questions, use `changes.md`, or `node tag-intel/intel.js diff <old report.json> <new report.json>` for any two pulls.
@@ -82,16 +82,18 @@ When the user asks about a competitor ("what does Topgolf's purchase tag send?",
 
 ## Optional: record a funnel
 
-To see real prices and pixel values in a booking or checkout flow, record one site at a time (not in bulk unless the user asks):
+To see real prices and pixel values in a funnel (checkout, booking, sign-up, quote or lead form), record one site at a time (not in bulk unless the user asks):
 1. In the site's tab, run `tag-intel/recorder-start.min.js`. It records data layer pushes and pixels on that page and survives in-page navigation (single-page apps). After a full page load, run it again.
-2. Click through the flow with the browser tools. **Stop before entering any personal or payment details.** Some booking systems hold inventory while the checkout page is open, so do not linger there or repeat the walk.
+2. Click through the flow with the browser tools. **Stop before entering any personal or payment details.** Some sites hold inventory or create a pending order while the checkout page is open, so do not linger there or repeat the walk. Never submit a lead, quote or contact form.
 3. Run `tag-intel/recorder-dump.min.js` on each page you want (each saves a file; fetch extra parts with `__tiPart(n)` if told), then `node tag-intel/intel.js recording <files…> -o work/<domain>/recording` for the funnel, per-platform pixel values and anomalies.
 
 ## Reading the results
 
 - **Values** in the conversion map are what each ad platform is told, read from the published tags. A fixed value of `1`, a missing value, or a value scraped from page text all change how the platform bids.
-- **"Counts a page visit as a conversion"** means the conversion fires on viewing a page (often a landing page or homepage), not on a booking or purchase.
+- **"Counts a page visit as a conversion"** means the conversion fires on viewing a page (often a landing page or homepage), not on a purchase, booking, sign-up or lead.
 - **Ad-library links** in the report are generated text only; the toolkit never requests them. Leave them for the user.
+- **Cookie-sync partners** are ad-tech companies whose ID-matching pixels fire because of the site's own ad vendors (e.g. a DSP syncing with SSPs). They are listed separately and are not part of the media mix.
+- **Offers** that appear on many store, city, branch or product pages are grouped into one row with the count and the variants.
 - **Shared account IDs** across sites usually mean a common owner, agency or buying account. **Agency signals** are fingerprints, not proof.
 - **Server-side signals** are the browser-visible traces of server-side tracking; server-to-server traffic itself cannot be seen.
 - **Promo dates** are parsed from page text; confirm anything important on the page itself. Expired promo pages that still exist are useful history.

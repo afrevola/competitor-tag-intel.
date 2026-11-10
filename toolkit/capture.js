@@ -162,8 +162,9 @@ await (async () => {
   const maxPages = opts.maxPages || 25;
   const maxSitemaps = opts.maxSitemaps || 10;
   const origin = location.origin;
-  const PROMO = /special|deal|promo|offer|discount|sale\b|coupon|holiday|black-?friday|cyber|\blto\b|limited|happy-?hour|kids-?(eat|bowl|play)|season-?pass|\bpass(es)?\b|gift-?card|bogo|free|campaign|\/lp\/|landing|seasonal|summer|winter|spring|\bfall\b|valentine|halloween|thanksgiving|new-?year|nye|mothers?-?day|fathers?-?day|moms|dads|grads?\b|back-?to-?school|military|veteran|student|membership|rewards?|loyalty|bundle|combo|unlimited|all-?you-?can/i;
-  const SKIP = /\/(blog|stories|news|press|careers|jobs|faq|help|privacy|terms|legal|accessibility|sitemap)\b|\.(pdf|jpg|png|xml)$/i;
+  // Offer / campaign words across industries (retail, travel, SaaS, finance, auto, venues, food, services)
+  const PROMO = /special|deal|promo|offer|discount|sale\b|sales-?event|clearance|outlet|coupon|voucher|rebate|cash-?back|holiday|black-?friday|cyber|bfcm|prime-?day|\blto\b|limited|bogo|free|trial|pricing|\bplans?\b|subscri|membership|rewards?|loyalty|refer|bundle|combo|package|unlimited|gift|campaign|\/lp\/|landing|seasonal|summer|winter|spring|\bfall\b|valentine|halloween|thanksgiving|christmas|xmas|new-?year|nye|easter|ramadan|diwali|lunar-?new-?year|mothers?-?day|fathers?-?day|graduat|grads?\b|back-?to-?school|tax-?(season|day)|military|veteran|student|teacher|nurse|first-?responder|senior|financing|\d+-?apr\b|lease|incentive|trade-?in|happy-?hour|kids-?(eat|stay|fly|free)|season-?pass|\bpass(es)?\b|\bsave\b|savings|percent-?off|\d+-?off\b|anniversary|early-?bird|pre-?order|presale|flash|doorbuster|exclusive/i;
+  const SKIP = /\/(blog|stories|news|press|newsroom|careers|jobs|faq|help|support|docs?|documentation|developers?|api|investors?|ir|privacy|terms|legal|accessibility|sitemap|account|login|sign-?in|register|cart|checkout|wishlist|search|order-status)\b|\.(pdf|jpe?g|png|webp|xml)$/i;
 
   const get = async (u, ms = 9000) => {
     try {
@@ -216,34 +217,58 @@ await (async () => {
     }
   }
 
+  // ---- entity slugs: a path segment that also appears under another parent folder and isn't an offer word
+  // (e.g. "philadelphia" in /locations/philadelphia/ and /promotions/philadelphia/; a store, city, branch,
+  // dealer or product line). Pages that differ only by an entity slug are copies of one offer.
+  const parentsOf = new Map();
+  for (const u of urls.keys()) {
+    let segs;
+    try { segs = new URL(u).pathname.split('/').filter(Boolean); } catch { continue; }
+    segs.forEach((seg, i) => {
+      const k = seg.toLowerCase();
+      if (!parentsOf.has(k)) parentsOf.set(k, new Set());
+      if (parentsOf.get(k).size < 4) parentsOf.get(k).add(segs.slice(0, i).join('/'));
+    });
+  }
+  // An entity also lives under a non-offer folder (/locations/x, /stores/x, /dealers/x, /products/x)
+  const isEntity = (seg) => {
+    const parents = parentsOf.get(seg.toLowerCase());
+    return !!parents && parents.size >= 2 && !/^\d+$/.test(seg) && [...parents].some((par) => par && !PROMO.test(par));
+  };
+  const offerKey = (pathname) => pathname.split('/').filter(Boolean).map((seg) => (isEntity(seg) || /^locations?$/i.test(seg) ? '*' : seg)).join('/').replace(/(^|\/)\*(\/\*)+/g, '$1*');
+  const variantOf = (pathname) => pathname.split('/').filter(Boolean).filter((seg) => isEntity(seg)).join('/');
+  const promoPath = (pathname) => PROMO.test(pathname.split('/').filter((seg) => !isEntity(seg)).join('/'));
+
   // ---- candidate promo pages: sitemap + links on the current page ----
   const cands = new Map();
   for (const [u, lm] of urls) {
     let p;
     try { p = new URL(u); } catch { continue; }
     if (p.origin !== origin && p.hostname.replace(/^www\./, '') !== location.hostname.replace(/^www\./, '')) continue;
-    if (PROMO.test(p.pathname.replace(/\/locations?\/[^/]+/, '')) && !SKIP.test(p.pathname)) cands.set(p.origin + p.pathname, { lastmod: lm, from: 'sitemap' });
+    if (promoPath(p.pathname) && !SKIP.test(p.pathname)) cands.set(p.origin + p.pathname, { lastmod: lm, from: 'sitemap' });
   }
   for (const a of document.querySelectorAll('a[href]')) {
     let p;
     try { p = new URL(a.getAttribute('href'), location.href); } catch { continue; }
     if (p.origin !== origin || SKIP.test(p.pathname)) continue;
     const label = (a.textContent || '').trim().slice(0, 80);
-    if (PROMO.test(p.pathname.replace(/\/locations?\/[^/]+/, '')) || (!/\/locations?\//.test(p.pathname) && PROMO.test(label))) {
+    if (promoPath(p.pathname) || (!variantOf(p.pathname) && PROMO.test(label))) {
       const k = p.origin + p.pathname;
       if (!cands.has(k)) cands.set(k, { lastmod: urls.get(k) || null, from: 'page link', label });
     }
   }
-  // Per-location copies of the same offer (/location/x/summer-pass, /location/y/summer-pass) count once
+  // Copies of one offer per store / city / branch / product line count once, with the variants listed
   const byOffer = new Map();
   for (const [u, info] of cands) {
-    let key = u;
-    try { key = new URL(u).pathname.replace(/\/locations?\/[^/]+/, '').replace(/\/$/, '') || u; } catch {}
+    let key = u, variant = '';
+    try { const pn = new URL(u).pathname; key = offerKey(pn) || u; variant = variantOf(pn); } catch {}
     const prev = byOffer.get(key);
-    if (!prev) byOffer.set(key, [u, { ...info, copies: 1 }]);
+    if (!prev) byOffer.set(key, [u, { ...info, copies: 1, variants: variant ? [variant] : [] }]);
     else {
-      prev[1].copies++;
-      if (String(info.lastmod || '') > String(prev[1].lastmod || '')) byOffer.set(key, [u, { ...info, copies: prev[1].copies }]);
+      const meta = prev[1];
+      const variants = variant && meta.variants.length < 60 ? [...meta.variants, variant] : meta.variants;
+      if (String(info.lastmod || '') > String(meta.lastmod || '')) byOffer.set(key, [u, { ...info, copies: meta.copies + 1, variants }]);
+      else { meta.copies++; meta.variants = variants; }
     }
   }
   const picked = [...byOffer.values()]
