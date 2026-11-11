@@ -263,3 +263,10 @@ export const AGENCY_SIGNALS = [
   ['Havas', /havas/i],
   ['Accretive Media', /accretivemedia/i],
 ];
+
+// Launch often ships custom code as an escaped string inside _satellite.__registerScript("…"); unescape it first
+export function unwrapCode(code) {
+  const s = String(code || '');
+  if (!/__registerScript\(/.test(s) && !/\\"/.test(s)) return s;
+  return s.replace(/\\\\/g, '\u0000').replace(/\\"/g, '"').replace(/\\'/g, "'").replace(/\\n/g, '\n').replace(/\u0000/g, '\\');
+}

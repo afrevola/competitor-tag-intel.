@@ -54,7 +54,11 @@ export function extractPricing(pages = []) {
         const h = headingBefore(m.index);
         name = h && !/register|pricing|plans|faq|tickets/i.test(h) ? `${h} · ${after}` : after;
       }
-      if (!name || !/[A-Za-z]/.test(name)) continue;
+      // A name must start with a letter, and company names ("Microsoft Corporation") aren't plans
+      if (!name || !/^[A-Za-z]/.test(name) || /\b(corporation|inc|llc|ltd|gmbh|company)\b/i.test(name)) {
+        // The first price on a product page is usually the product itself: name it by the page headline
+        if (!tiers.length && p.h1?.[0]) name = p.h1[0].trim().slice(0, 60); else continue;
+      }
       const key = `${name}|${price}`;
       if (seen.has(key)) continue;
       seen.add(key);

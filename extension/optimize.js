@@ -4,11 +4,11 @@
 
 const GOALS = [
   // [id, label, test on "event + trigger events + trigger text"]
-  ['purchase', 'Purchase / order', /purchase|checkout_?complet|order_?(complet|placed|confirm)|orderCompleted|transaction|\bsale\b|payment_?(success|complete)|paid|subscription_?(start|created)|\bcounter .*order|sales .*order|completepayment/i],
+  ['purchase', 'Purchase / order', /purchase|conversion[ _-]?buy|\bbuy[ _-]?(complete|confirm)|checkout_?complet|order_?(complet|placed|confirm)|orderCompleted|transaction|\bsale\b|payment_?(success|complete)|paid|subscription_?(start|created)|\bcounter .*order|sales .*order|completepayment/i],
   ['booking', 'Booking / reservation', /book(ing)?_?(complete|confirm|made)|reservation_?(complete|confirm|made)|reserved|booked/i],
   ['lead', 'Lead / form submit', /lead|form_?submit|formSubmit|FormSubmitted|hubspot|marketo|contact|demo|quote|inquiry|enquiry|request|sales_form|submit_application|schedule/i],
-  ['signup', 'Sign-up / account / trial', /sign_?up|signupClicked|register|registration|account_?created|accountCreated|user_?created|userCreated|create_?account|start_?trial|trial_?start|free_?trial|complete_?registration/i],
-  ['checkout', 'Cart / checkout step', /add_?to_?cart|addToCart|begin_?checkout|initiate_?checkout|InitiateCheckout|add_?payment|add_?shipping|checkout|orderStarted|view_?cart/i],
+  ['signup', 'Sign-up / account / trial', /\bjoin\b|sign_?up|signupClicked|register|registration|account_?created|accountCreated|user_?created|userCreated|create_?account|start_?trial|trial_?start|free_?trial|complete_?registration/i],
+  ['checkout', 'Cart / checkout step', /initiate[ _-]?buy|add_?to_?cart|addToCart|begin_?checkout|initiate_?checkout|InitiateCheckout|add_?payment|add_?shipping|checkout|orderStarted|view_?cart/i],
   ['product', 'Product / content view', /view_?item|ViewContent|product_?view|view_?product|PDP|search\b/i],
   ['click', 'Click on a button or link', /gtm\.click|gtm\.linkClick|click/i],
   ['engagement', 'Engagement (scroll, time, video)', /scroll|gtm\.timer|timer|video|engaged/i],
@@ -24,7 +24,9 @@ function goalOf(r) {
   const evs = [...fire.matchAll(/\{\{Event\}\} (?:equals|matches RegEx|contains) ([^\s|]+(?:\|[^\s|]+)*)/g)].map((m) => m[1]).join(' ');
   // Event names carry the goal for most platforms; Google Ads events are just "conversion <label>"
   const name = /^conversion /.test(r.event) ? '' : r.event;
-  const text = `${name} ${evs}`;
+  // Launch rule names usually say what the rule is for ("… | Conversion Buy", "… | Initiate Buy")
+  const rule = (fire.match(/Launch rule "([^"]+)"/) || [])[1] || '';
+  const text = `${name} ${evs} ${rule.split('|').slice(1).join(' ')}`;
   if (r.shopifyApp) {
     const e = r.shopifyEvent || '';
     if (/purchase|checkout_completed/.test(e)) return 'purchase';
@@ -51,6 +53,7 @@ function valueKind(r) {
   if (/^\{\{Custom JS/.test(s)) return 'computed by custom code';
   if (/^\{\{|^%.*%$|\{\{/.test(s)) return 'dynamic (from the page or data layer)';
   if (/^-?\d+(\.\d+)?$/.test(s)) return `fixed (${s})`;
+  if (/^<[^>]+>$/.test(s)) return `unfilled placeholder ${s}`;
   return s.slice(0, 40);
 }
 

@@ -169,7 +169,12 @@ export async function collectPage() {
       else experiments.push({ tool: 'Intelligems', name: '(running; test names not exposed)', variant: null });
     }
   } catch {}
-  try { if (window.adobe?.target) experiments.push({ tool: 'Adobe Target', name: '(loaded; activity names not exposed)', variant: null }); } catch {}
+  try {
+    // Adobe Target exposes activity names when response tokens are on (window.ttMETA)
+    const tt = Array.isArray(window.ttMETA) ? window.ttMETA : [];
+    for (const e of tt) experiments.push({ tool: 'Adobe Target', name: e.CampaignName || e.activity?.name || String(e.CampaignId || ''), variant: e.RecipeName || e.experience?.name || null });
+    if (!tt.length && window.adobe?.target) experiments.push({ tool: 'Adobe Target', name: '(loaded; activity names not exposed)', variant: null });
+  } catch {}
   try { if (window.monetateQ || window.monetate) experiments.push({ tool: 'Monetate', name: '(loaded; test names not exposed)', variant: null }); } catch {}
 
   // ---- Messaging on this page ----

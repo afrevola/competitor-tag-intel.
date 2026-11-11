@@ -1,6 +1,7 @@
 // Builds a per-platform conversion map from GTM containers and Adobe Launch rules,
 // with flags for setups that mislead bidding or reporting.
 import { decodeHit } from './pixels.js';
+import { unwrapCode } from './vendors.js';
 import { analyzeShopify } from './shopify.js';
 
 const PURCHASE_EVENT = /purchase|complete|order|checkout_complete|booking_completed|transaction|\bsale\b|payment|paid|subscri/i;
@@ -17,7 +18,11 @@ const VALUE_IN_OBJ = /(?:^|[,{\s])["']?(value|price|revenue|conv_value|event_val
 function valueFromObj(obj) {
   if (!obj) return null;
   const m = obj.match(VALUE_IN_OBJ);
-  return m ? m[2].trim().replace(/^parseFloat\((.*)\)$/, '$1').replace(/^["']|["']$/g, '') : null;
+  if (!m) return null;
+  const v = m[2].trim().replace(/^parseFloat\((.*)\)$/, '$1');
+  // A bare variable name (value: r) is computed in the code; quoted text is kept as written
+  if (/^[A-Za-z_$][\w$.]*$/.test(v) && !/^(true|false|null|undefined)$/.test(v)) return `{{code variable ${v}}}`;
+  return v.replace(/^["']|["']$/g, '');
 }
 
 // Find tracking calls in custom code (GTM Custom HTML or Launch custom code)
@@ -27,7 +32,7 @@ const stripComments = (code) => String(code || '')
   .replace(/(^|[\s;{}(),])\/\/[^\n]*/g, '$1');
 
 export function callsInCode(code) {
-  const all = rawCalls(stripComments(code));
+  const all = rawCalls(stripComments(unwrapCode(code)));
   const best = new Map();
   for (const c of all) {
     const k = c.platform + '|' + c.event + '|' + (c.account || '');
@@ -41,13 +46,27 @@ function rawCalls(code) {
   if (!code) return out;
   let m;
   const generic = /\b(fbq|snaptr|pintrk|rdt|twq|clq|oaiq|qp|ndp|spdt|saq)\(\s*["'](track|trackCustom|trackSingle|event|conv)["']\s*,\s*["']([^"']+)["']\s*(?:,\s*["']?[^,{)]*["']?\s*)?(?:,\s*(\{[^}]*\}))?/g;
-  while ((m = generic.exec(code))) out.push({ platform: CALL_FNS[m[1]], event: m[3], value: valueFromObj(m[4] || code.slice(m.index, m.index + 400)), how: `${m[1]}("${m[2]}")` });
+  while ((m = generic.exec(code))) {
+    // fbq("trackSingle", "<pixel id>", "Event", {…}): the second argument is the pixel
+    if (m[2] === 'trackSingle' || m[2] === 'trackSingleCustom') {
+      const ts = code.slice(m.index).match(/^\w+\(\s*["']trackSingle(?:Custom)?["']\s*,\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']\s*(?:,\s*(\{[^}]*\}))?/);
+      if (ts) { out.push({ platform: CALL_FNS[m[1]], account: ts[1], event: ts[2], value: valueFromObj(ts[3]), how: `${m[1]}("trackSingle")` }); continue; }
+    }
+    out.push({ platform: CALL_FNS[m[1]], event: m[3], value: valueFromObj(m[4] || code.slice(m.index, m.index + 400)), how: `${m[1]}("${m[2]}")` });
+  }
+  // Impact: ire("trackConversion", <action tracker id>, {…})
+  const ire = /\bire\(\s*["']trackConversion["']\s*,\s*["']?(\d+)/g;
+  while ((m = ire.exec(code))) out.push({ platform: 'Impact', event: 'sale (action tracker ' + m[1] + ')', value: valueFromObj(code.slice(m.index, m.index + 600).replace(/orderSubTotal\w*|orderTotal/, 'value')), how: 'ire trackConversion' });
   const ttq = /ttq\.track\(\s*["']([^"']+)["']\s*(?:,\s*(\{[^}]*\}))?/g;
   while ((m = ttq.exec(code))) out.push({ platform: 'TikTok', event: m[1], value: valueFromObj(m[2]), how: 'ttq.track' });
-  const gtagConv = /gtag\(\s*["']event["']\s*,\s*["']conversion["']\s*,\s*(\{[^}]*\})/g;
+  // gtag("event", "conversion" | "purchase" | …, { send_to: "AW-…/label" | "DC-…/group/activity+counting" })
+  const gtagConv = /gtag\(\s*["']event["']\s*,\s*["']([\w-]+)["']\s*,\s*(\{[^}]*\})/g;
   while ((m = gtagConv.exec(code))) {
-    const to = ((m[1].match(/send_to["']?\s*:\s*["']([^"']+)/) || [])[1] || '').trim();
-    out.push({ platform: /^DC-/.test(to) ? 'Floodlight / CM360' : 'Google Ads', account: to.split('/')[0] || null, event: 'conversion ' + (to.split('/')[1] || ''), value: valueFromObj(m[1]), how: 'gtag conversion' });
+    const to = ((m[2].match(/send_to["']?\s*:\s*["']([^"']+)/) || [])[1] || '').trim();
+    if (!/^(AW|DC)-/.test(to) && m[1] !== 'conversion') continue;
+    const dc = /^DC-/.test(to);
+    const label = to.split('/').slice(1).join('/');
+    out.push({ platform: dc ? 'Floodlight / CM360' : 'Google Ads', account: to.split('/')[0] || null, event: dc ? `${/\+(transactions|items_sold)/.test(label) ? 'sales' : 'counter'} ${label}` : `${m[1] === 'conversion' ? 'conversion' : m[1]} ${label}`.trim(), value: valueFromObj(m[2]), how: `gtag ${m[1]}` });
   }
   const uet = /uetq[^;]*?\.push\(\s*(?:["']event["']\s*,\s*["']([^"']+)["']\s*,\s*(\{[^}]*\})|(\{[^}]*\}))/g;
   while ((m = uet.exec(code))) {
@@ -64,8 +83,8 @@ function rawCalls(code) {
   }
   const nb = /Northbeam\.(firePurchaseEvent|fireCustomGoal)\(\s*["']?([^"',)]*)/g;
   while ((m = nb.exec(code))) out.push({ platform: 'Northbeam', event: m[1] === 'firePurchaseEvent' ? 'purchase' : 'goal: ' + m[2], value: null, how: 'Northbeam' });
-  // Image pixels inside HTML
-  const img = /<img[^>]+src=["']([^"']+)["']/gi;
+  // Image pixels inside HTML, or built in JavaScript (new Image().src = "https://…")
+  const img = /(?:<img[^>]+src=|\.src\s*=\s*)["'](https?:\/\/[^"']+)["']/gi;
   while ((m = img.exec(code))) for (const h of decodeHit(m[1].replace(/&amp;/g, '&'))) {
     if (h.noise) continue;
     out.push({ platform: h.vendor, account: h.account, event: h.event, value: h.value ?? rawValueParam(m[1]), how: 'image pixel' });
@@ -200,9 +219,12 @@ export function buildConversionMap({ gtm = [], launch = null, page = null }) {
   for (const r of launch?.rules || []) {
     const firing = [`Launch rule "${r.name}" (${r.events.map((e) => e.type).join(', ')})`];
     for (const a of r.actions || []) {
+      // Code that waits for an order-confirmation message fires on the purchase itself, whatever the rule's trigger
+      const code = unwrapCode(a.code || '');
+      const waitsForOrder = /addEventListener\(\s*["']message["']/.test(code) && /order|purchas|transaction/i.test(code);
       for (const c of callsInCode(a.code)) {
         if (/^(PageView|page_view|pageview|pageLoad|ViewContent)$/i.test(c.event) && !c.value) continue;
-        push({ container: 'Adobe Launch', tag: r.name, tagType: 'Custom code', paused: false, firing, blocking: [], platform: c.platform, account: c.account || null, event: c.event, label: c.event, value: c.value, how: c.how });
+        push({ container: 'Adobe Launch', tag: r.name, tagType: 'Custom code', paused: false, firing: waitsForOrder ? [`${firing[0]}, on an order-confirmation message (purchase)`] : firing, blocking: [], platform: c.platform, account: c.account || null, event: c.event, label: c.event, value: c.value, how: c.how });
       }
       if (a.ext === 'adobe-analytics' && a.type === 'set-variables') {
         const evs = (a.settings?.trackerProperties?.events || []).map((e) => e.name).filter(Boolean);
@@ -223,6 +245,7 @@ export function buildConversionMap({ gtm = [], launch = null, page = null }) {
     if (/\{\{(Page Query|Page URL|Page Url)\}\}[^|]*brand/i.test(trig)) r.flags.push(['info', 'Only for visitors arriving from brand-search ads']);
     if (r.paused) r.flags.push(['paused', 'Paused']);
     if (!r.firing?.length && !r.paused) r.flags.push(['warn', 'No firing trigger']);
+    if (/^<[^>]+>$|\{\{\s*\w+\s*\}\}$|^%\w+%$|^\$\{/.test(String(r.value ?? '')) && !/^\{\{(Constant|Custom JS|DLV|dlv)/.test(String(r.value))) r.flags.push(['bad', `Sends a template placeholder (${r.value}) instead of a real value`]);
     if (vk.fixed != null) r.flags.push([vk.fixed <= 1 ? 'warn' : 'info', vk.fixed <= 1 ? `Fixed value ${vk.fixed} (counts conversions, not revenue)` : `Fixed value ${vk.fixed}`]);
     if (vk.scraped) r.flags.push(['warn', 'Value scraped from the page (breaks if the page layout changes)']);
     if (isPurchase && r.valueText === '—' && !r.counter && r.platform !== 'GA4') r.flags.push(['warn', 'No value sent (counted, not valued)']);

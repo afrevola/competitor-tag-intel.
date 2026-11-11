@@ -1,5 +1,5 @@
 // Summarizes every marketing vendor seen on the site by channel, plus agency fingerprints.
-import { CHANNELS, channelOf, detectVendors, AGENCY_SIGNALS } from './vendors.js';
+import { CHANNELS, channelOf, detectVendors, AGENCY_SIGNALS, unwrapCode } from './vendors.js';
 import { analyzeShopify } from './shopify.js';
 
 const BUILTIN = {
@@ -43,7 +43,7 @@ export function buildMediaMix({ page, gtm = [], launch = null, extraUrls = [] })
     for (const a of r.actions || []) {
       if (a.ext === 'adobe-analytics') add('Adobe Analytics', 'Adobe Launch');
       if (a.ext && a.ext.startsWith('adobe-target')) add('Adobe Target', 'Adobe Launch');
-      detectVendors((a.code || '') + ' ' + (a.external || '')).forEach((v) => add(v, 'Adobe Launch'));
+      detectVendors(unwrapCode(a.code || '') + ' ' + (a.external || '')).forEach((v) => add(v, 'Adobe Launch'));
     }
   }
   for (const c of page?.containers || []) {
@@ -82,7 +82,7 @@ export function buildMediaMix({ page, gtm = [], launch = null, extraUrls = [] })
   // Agency fingerprints from URLs and tag code
   const corpus = [];
   for (const { data } of gtm) for (const t of data?.tags || []) if (t.category === 'tag') corpus.push([JSON.stringify(t.params), `GTM tag #${t.id}`]);
-  for (const r of launch?.rules || []) for (const a of r.actions || []) corpus.push([(a.code || '') + (a.external || ''), `Launch rule "${r.name}"`]);
+  for (const r of launch?.rules || []) for (const a of r.actions || []) corpus.push([unwrapCode(a.code || '') + (a.external || ''), `Launch rule "${r.name}"`]);
   for (const u of urls) corpus.push([u, 'network']);
   const agencies = [];
   for (const [name, re] of AGENCY_SIGNALS) {

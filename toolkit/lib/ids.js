@@ -60,6 +60,7 @@ const norm = (platform, id) => {
 };
 
 import { analyzeShopify } from './shopify.js';
+import { unwrapCode } from './vendors.js';
 
 export function extractAccountIds({ page, gtm = [], launch = null, extraUrls = [] }) {
   const out = new Map(); // platform -> Map(id -> Set(source))
@@ -80,6 +81,7 @@ export function extractAccountIds({ page, gtm = [], launch = null, extraUrls = [
     m.get(id).add(source);
   };
   const scanCode = (code, source) => {
+    code = unwrapCode(code);
     if (!code) return;
     for (const [platform, re] of CODE_PATTERNS) {
       re.lastIndex = 0;

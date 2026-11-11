@@ -68,8 +68,13 @@ export function analyzeExtras(cap, conversionRows = []) {
   // ---- site footprint from the sitemap
   const paths = (promos.sitemapPaths || []).map((x) => x.split('\t')[0]);
   const sections = {};
+  // Sites split by language (/en-us/, /de-de/) are counted by the section under the language folder
+  const LOC = /^[a-z]{2}(-[a-z]{2,4})?$/i;
+  const firstSegs = paths.map((p) => p.split('/').filter(Boolean)[0] || '');
+  const localized = firstSegs.filter((x) => LOC.test(x)).length > paths.length * 0.5;
   for (const p of paths) {
-    const seg = (p.split('/').filter(Boolean)[0] || '(home)').toLowerCase();
+    const segs = p.split('/').filter(Boolean);
+    const seg = ((localized && LOC.test(segs[0] || '') ? segs[1] : segs[0]) || '(home)').toLowerCase();
     sections[seg] = (sections[seg] || 0) + 1;
   }
   const footprint = {
