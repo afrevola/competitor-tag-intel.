@@ -71,8 +71,10 @@ function filtersOf(r) {
   const q = t.match(/\{\{Page Query\}\} (?:contains|matches RegEx|equals) ([^\s|]+(?:\|[^\s|]+)*)/);
   if (q) out.push(`only for visitors from campaign URLs matching "${q[1]}"`);
   for (const m of t.matchAll(/\{\{Page (Path|URL|Url|Hostname|Host)\}\} (?:contains|matches RegEx|starts with|equals) (\S+)/g)) {
-    const v = m[2];
-    if (/Host/.test(m[1]) || /^(?:https?:\/\/)?(?:www\.)?[\w-]+(?:\.[a-z]{2,})+\/?$/i.test(v)) out.push(`site: ${v.replace(/^https?:\/\/(www\.)?/, '')}`);
+    const negated = /NOT \($/.test(t.slice(Math.max(0, m.index - 5), m.index));
+    const v = negated ? m[2].replace(/\)+$/, '') : m[2];
+    if (negated) out.push(`except on pages matching "${v.slice(0, 60)}"`);
+    else if (/Host/.test(m[1]) || /^(?:https?:\/\/)?(?:www\.)?[\w-]+(?:\.[a-z]{2,})+\/?$/i.test(v)) out.push(`site: ${v.replace(/^https?:\/\/(www\.)?/, '')}`);
     else out.push(`only on pages matching "${v.slice(0, 60)}"`);
   }
   if (/GPC|Do Not Track/i.test(t)) out.push('skipped for privacy opt-outs');
@@ -182,6 +184,8 @@ export function summarizeFlags(rows) {
         .replace(/\(created by Shopify[^)]*\)/, '(Shopify Google app)')
         .replace(/on "[^"]+"/, 'on a non-purchase step')
         .replace(/Also set up in [^;]+?; both load/, 'Also set up in another container that loads')
+        .replace(/also sent by # on a different event with a different value \([^)]*\)/, 'also sent by another tag on a different event, with a different value')
+        .replace(/also sent by # on/, 'also sent by another tag on')
         .replace(/\(([^)]{0,80})\)$/, '')
         .trim();
       counts[key] = (counts[key] || 0) + 1;

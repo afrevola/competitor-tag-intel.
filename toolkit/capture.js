@@ -479,7 +479,11 @@ await (async () => {
   await new Promise((r) => setTimeout(r, OPTS.wait));
   const page = await collectPage();
   const containers = {};
-  for (const c of page.containers.filter((c) => /^GTM-/.test(c.id))) containers[c.id] = await getText(c.src || 'https://www.googletagmanager.com/gtm.js?id=' + c.id);
+  for (const c of page.containers.filter((c) => /^GTM-/.test(c.id))) {
+    // Health-check and other variants of the loader URL can fail; fall back to the plain container URL
+    const plain = 'https://www.googletagmanager.com/gtm.js?id=' + c.id;
+    containers[c.id] = (c.src && !/gtg_health/.test(c.src) ? await getText(c.src) : null) || await getText(plain);
+  }
   let promos = null;
   if (OPTS.promos) { try { promos = await scanPromos({ maxPages: OPTS.maxPromoPages }); } catch (e) { promos = { error: String(e) }; } }
   const out = { v: 1, tool: 'tag-intel', capturedAt: new Date().toISOString(), page, containers, promos };

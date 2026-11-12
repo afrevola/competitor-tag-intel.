@@ -96,6 +96,16 @@ const str = (v) => (v == null ? '' : typeof v === 'string' ? v : JSON.stringify(
 
 export function parseContainer(src) {
   const resource = extractResource(src);
+  // A gallery template's own code (published in the container's runtime) names the hosts it sends to
+  const tplCache = {};
+  const templateUrls = (fn) => {
+    if (fn in tplCache) return tplCache[fn];
+    const k = src.indexOf('[50,"' + fn + '"');
+    if (k < 0) return (tplCache[fn] = '');
+    const e = src.indexOf('[50,"__', k + 10);
+    const code = src.slice(k, e > 0 ? Math.min(e, k + 60000) : k + 60000);
+    return (tplCache[fn] = [...new Set(code.match(/https?:\/\/[^"'\s,\]\\]+/g) || [])].join(' '));
+  };
   const macros = resource.macros || [];
   const tags = resource.tags || [];
   const preds = resource.predicates || [];
@@ -163,7 +173,7 @@ export function parseContainer(src) {
     if (t.teardown_tags) params['(cleanup tag)'] = fmt(t.teardown_tags);
     if (t.priority) params['(priority)'] = t.priority;
     let vendors = [];
-    if (fn === '__html' || fn === '__img' || fn.startsWith('__cvt_')) vendors = detectVendors(JSON.stringify(params), { params: fn.startsWith('__cvt_') });
+    if (fn === '__html' || fn === '__img' || fn.startsWith('__cvt_')) vendors = detectVendors(JSON.stringify(params) + (fn.startsWith('__cvt_') ? ' ' + templateUrls(fn) : ''), { params: fn.startsWith('__cvt_') });
     let category = 'tag';
     if (LISTENERS.has(fn)) category = 'listener';
     else if (/^__(ogt|ccd)_/.test(fn) || fn === '__tg') category = 'internal';

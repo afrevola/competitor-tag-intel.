@@ -1,7 +1,7 @@
 // Builds a per-platform conversion map from GTM containers and Adobe Launch rules,
 // with flags for setups that mislead bidding or reporting.
 import { decodeHit } from './pixels.js';
-import { unwrapCode } from './vendors.js';
+import { unwrapCode, channelOf } from './vendors.js';
 import { analyzeShopify } from './shopify.js';
 
 const PURCHASE_EVENT = /purchase|complete|order|checkout_complete|booking_completed|transaction|\bsale\b|payment|paid|subscri/i;
@@ -45,11 +45,11 @@ function rawCalls(code) {
   const out = [];
   if (!code) return out;
   let m;
-  const generic = /\b(fbq|snaptr|pintrk|rdt|twq|clq|oaiq|qp|ndp|spdt|saq)\(\s*["'](track|trackCustom|trackSingle|event|conv)["']\s*,\s*["']([^"']+)["']\s*(?:,\s*["']?[^,{)]*["']?\s*)?(?:,\s*(\{[^}]*\}))?/g;
+  const generic = /\b(fbq|snaptr|pintrk|rdt|twq|clq|oaiq|qp|ndp|spdt|saq)\(\s*["'](track|trackCustom|trackSingle|event|conv)["']\s*,\s*["']([^"']+)["']\s*(?:,\s*["']?[^,{)]*["']?\s*)?(?:,\s*(\{(?:\{\{[^{}]*\}\}|[^{}])*\}))?/g;
   while ((m = generic.exec(code))) {
     // fbq("trackSingle", "<pixel id>", "Event", {…}): the second argument is the pixel
     if (m[2] === 'trackSingle' || m[2] === 'trackSingleCustom') {
-      const ts = code.slice(m.index).match(/^\w+\(\s*["']trackSingle(?:Custom)?["']\s*,\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']\s*(?:,\s*(\{[^}]*\}))?/);
+      const ts = code.slice(m.index).match(/^\w+\(\s*["']trackSingle(?:Custom)?["']\s*,\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']\s*(?:,\s*(\{(?:\{\{[^{}]*\}\}|[^{}])*\}))?/);
       if (ts) { out.push({ platform: CALL_FNS[m[1]], account: ts[1], event: ts[2], value: valueFromObj(ts[3]), how: `${m[1]}("trackSingle")` }); continue; }
     }
     out.push({ platform: CALL_FNS[m[1]], event: m[3], value: valueFromObj(m[4] || code.slice(m.index, m.index + 400)), how: `${m[1]}("${m[2]}")` });
@@ -57,10 +57,10 @@ function rawCalls(code) {
   // Impact: ire("trackConversion", <action tracker id>, {…})
   const ire = /\bire\(\s*["']trackConversion["']\s*,\s*["']?(\d+)/g;
   while ((m = ire.exec(code))) out.push({ platform: 'Impact', event: 'sale (action tracker ' + m[1] + ')', value: valueFromObj(code.slice(m.index, m.index + 600).replace(/orderSubTotal\w*|orderTotal/, 'value')), how: 'ire trackConversion' });
-  const ttq = /ttq\.track\(\s*["']([^"']+)["']\s*(?:,\s*(\{[^}]*\}))?/g;
+  const ttq = /ttq\.track\(\s*["']([^"']+)["']\s*(?:,\s*(\{(?:\{\{[^{}]*\}\}|[^{}])*\}))?/g;
   while ((m = ttq.exec(code))) out.push({ platform: 'TikTok', event: m[1], value: valueFromObj(m[2]), how: 'ttq.track' });
   // gtag("event", "conversion" | "purchase" | …, { send_to: "AW-…/label" | "DC-…/group/activity+counting" })
-  const gtagConv = /gtag\(\s*["']event["']\s*,\s*["']([\w-]+)["']\s*,\s*(\{[^}]*\})/g;
+  const gtagConv = /gtag\(\s*["']event["']\s*,\s*["']([\w-]+)["']\s*,\s*(\{(?:\{\{[^{}]*\}\}|[^{}])*\})/g;
   while ((m = gtagConv.exec(code))) {
     const to = ((m[2].match(/send_to["']?\s*:\s*["']([^"']+)/) || [])[1] || '').trim();
     if (!/^(AW|DC)-/.test(to) && m[1] !== 'conversion') continue;
@@ -68,7 +68,7 @@ function rawCalls(code) {
     const label = to.split('/').slice(1).join('/');
     out.push({ platform: dc ? 'Floodlight / CM360' : 'Google Ads', account: to.split('/')[0] || null, event: dc ? `${/\+(transactions|items_sold)/.test(label) ? 'sales' : 'counter'} ${label}` : `${m[1] === 'conversion' ? 'conversion' : m[1]} ${label}`.trim(), value: valueFromObj(m[2]), how: `gtag ${m[1]}` });
   }
-  const uet = /uetq[^;]*?\.push\(\s*(?:["']event["']\s*,\s*["']([^"']+)["']\s*,\s*(\{[^}]*\})|(\{[^}]*\}))/g;
+  const uet = /uetq[^;]*?\.push\(\s*(?:["']event["']\s*,\s*["']([^"']+)["']\s*,\s*(\{(?:\{\{[^{}]*\}\}|[^{}])*\})|(\{(?:\{\{[^{}]*\}\}|[^{}])*\}))/g;
   while ((m = uet.exec(code))) {
     const obj = m[2] || m[3] || '';
     const ea = m[1] || (obj.match(/\bea["']?\s*:\s*["']([^"']+)/) || [])[1] || 'event';
@@ -76,7 +76,7 @@ function rawCalls(code) {
   }
   const li = /lintrk\(\s*["']track["']\s*,\s*\{[^}]*conversion_id\s*:\s*["']?(\d+)/g;
   while ((m = li.exec(code))) out.push({ platform: 'LinkedIn', event: 'conversion ' + m[1], value: null, how: 'lintrk' });
-  const adroll = /adroll\.track\(\s*["']([^"']+)["']\s*(?:,\s*(\{[^}]*\}))?/g;
+  const adroll = /adroll\.track\(\s*["']([^"']+)["']\s*(?:,\s*(\{(?:\{\{[^{}]*\}\}|[^{}])*\}))?/g;
   while ((m = adroll.exec(code))) {
     const seg = m[2] && (m[2].match(/segment_name\s*:\s*["']([^"']+)/) || [])[1];
     out.push({ platform: 'AdRoll / NextRoll', event: m[1] + (seg ? ` (segment ${seg})` : ''), value: valueFromObj(m[2] && m[2].replace(/conversion_value/, 'value')), how: 'adroll.track' });
@@ -149,10 +149,24 @@ export function buildConversionMap({ gtm = [], launch = null, page = null }) {
       else if (t.fn === '__pntr') push({ ...base, platform: 'Pinterest', account: P.tagId, event: P.eventName || 'event', label: P.eventName, value: P.value || P.orderValue });
       else if (t.fn.startsWith('__cvt_')) {
         if (!t.vendors.length || /consent|K8GSG/i.test(t.fn) || 'command' in P) continue;
-        const ev = P.event || P.eventName || P.event_type || P.eventType || P.standardEventName || P.customEventName || 'event';
-        const value = P.value ?? P.transactionValue ?? P.price ?? P.revenue ?? P.orderSubTotal ?? P.conversionValue ?? null;
-        const acct = P.pixel_code || P.pixelCode || P.pixel_id || P.pixelId || P.partnerId || P.id || null;
-        push({ ...base, platform: t.vendors[0], account: typeof acct === 'string' ? acct : null, event: String(ev), label: String(ev), value });
+        // Consent banners, session replay and other site tools aren't conversions
+        if (/^(Consent|Session Replay & UX|Tag Management|Site Platform|Chat & Support|Other)$/.test(channelOf(t.vendors[0]))) continue;
+        // Meta's own template stores "standard" / "custom" in eventName and the real name beside it
+        const named = P.eventName === 'standard' ? P.standardEventName : P.eventName === 'custom' ? P.customEventName : null;
+        const ev = named || P.event || P.eventName || P.event_type || P.eventType || P.standardEventName || P.customEventName || 'event';
+        // Values can sit in a parameter table ({name: "value", value: …}) instead of a field of their own
+        const fromList = (() => {
+          for (const k of ['objectPropertyList', 'eventParameters', 'customParameters', 'parameters', 'properties', 'eventData']) {
+            const L = P[k];
+            if (!Array.isArray(L)) continue;
+            const hit = L.find((x) => x && /^(value|revenue|total|price)$/i.test(String(x.name ?? x.key ?? x.parameter ?? '')));
+            if (hit) return hit.value ?? hit.parameterValue ?? null;
+          }
+          return null;
+        })();
+        const value = P.value ?? P.transactionValue ?? P.price ?? P.price_total ?? P.revenue ?? P.orderSubTotal ?? P.conversionValue ?? fromList ?? null;
+        const acct = unConst(P.pixel_code || P.pixelCode || P.pixel_id || P.pixelId || P.partnerId || P.id || null);
+        push({ ...base, platform: t.vendors[0], account: typeof acct === 'string' && acct ? acct : null, event: String(ev), label: String(ev), value, agencyAccount: P.account_id && typeof P.account_id === 'string' ? P.account_id : undefined });
       } else if (t.fn === '__html' || t.fn === '__img') {
         const code = t.fn === '__html' ? String(P.html || '') : `<img src="${P.url || ''}">`;
         for (const c of callsInCode(code)) {
@@ -290,6 +304,23 @@ export function buildConversionMap({ gtm = [], launch = null, page = null }) {
     const conts = [...new Set(list.map((r) => r.container))];
     if (conts.length < 2) continue;
     for (const r of list) r.flags.push(['bad', `Also set up in ${conts.filter((c) => c !== r.container).join(', ')}; both load on this page, so it may count twice`]);
+  }
+  // One purchase conversion sent by two tags on different events (often an old and a new checkout, or two
+  // booking-engine data layers). If both events happen in one order it counts twice, with different values.
+  for (const list of Object.values(byConv)) {
+    if (list.length < 2 || new Set(list.map((r) => r.container)).size > 1) continue;
+    if (!list.every((r) => PURCHASE_EVENT.test(r.event) || /purchase|transaction|confirmation|booking|order/i.test(r.triggerText || ''))) continue;
+    const trigs = [...new Set(list.map((r) => r.triggerText))];
+    if (trigs.length < 2) continue;
+    // Different value fields (subtotal on one, total with tax on the other) mark two feeds of the same order;
+    // the same value field on different events is usually different products sharing one goal
+    const vals = [...new Set(list.map((r) => r.valueText || '—'))];
+    if (vals.length < 2) continue;
+    for (const r of list) {
+      if (r.flags.some((f) => /Duplicate|Also set up/.test(f[1]))) continue;
+      const others = list.filter((x) => x !== r).map((x) => x.tag).join(', ');
+      r.flags.push(['warn', `Same conversion also sent by ${others} on a different event with a different value (${vals.join(' vs ')}); counts twice if both events fire in one order`]);
+    }
   }
   rows.forEach((r) => delete r.variables);
   return rows;

@@ -106,6 +106,7 @@ export function buildMediaMix({ page, gtm = [], launch = null, extraUrls = [] })
   if (count('B2B & ABM')) notes.push(`B2B account-based marketing / intent data: ${byChannel['B2B & ABM'].map((v) => v.name).join(', ')}`);
   if (count('Ad Monetization')) notes.push(`sells ad space on its own site (${byChannel['Ad Monetization'].map((v) => v.name).join(', ')})`);
   if (count('Payments & Financing')) notes.push(`payments / buy-now-pay-later: ${byChannel['Payments & Financing'].map((v) => v.name).join(', ')}`);
+  if (count('Travel & Hospitality')) notes.push(`travel stack (booking engine, metasearch, revenue management): ${byChannel['Travel & Hospitality'].map((v) => v.name).join(', ')}`);
   if (count('Site Platform')) notes.push(`site platform: ${byChannel['Site Platform'].map((v) => v.name).join(', ')}`);
   if (count('Attribution')) notes.push(`third-party attribution: ${byChannel['Attribution'].map((v) => v.name).join(', ')}`);
 

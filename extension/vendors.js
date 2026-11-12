@@ -4,7 +4,7 @@ export const CHANNELS = [
   'Search', 'Social', 'Programmatic', 'CTV / TV', 'Retargeting', 'Affiliate & Partners',
   'Attribution', 'CDP & Data', 'Email & CRM', 'Analytics', 'Testing & Personalization',
   'Session Replay & UX', 'Surveys & Reviews', 'B2B & ABM', 'Chat & Support', 'Payments & Financing',
-  'Ad Monetization', 'Commerce Apps', 'Tag Management', 'Site Platform', 'Consent', 'Other',
+  'Ad Monetization', 'Commerce Apps', 'Travel & Hospitality', 'Tag Management', 'Site Platform', 'Consent', 'Other',
 ];
 
 // [name, regex, channel]
@@ -225,6 +225,27 @@ export const VENDORS = [
   ['Ketch', /ketchjs|ketchcdn/i, 'Consent'],
   ['Sourcepoint', /sourcepoint/i, 'Consent'],
   ['OpenAI (oaiq)', /oaiq/i, 'Other'],
+  // Travel & hospitality: booking engines, metasearch, revenue management, guest marketing
+  ['SynXis (Sabre booking engine)', /synxis/i, 'Travel & Hospitality'],
+  ['DerbySoft (metasearch)', /derbysoft/i, 'Travel & Hospitality'],
+  ['Duetto (revenue management)', /duettoresearch|duettocloud/i, 'Travel & Hospitality'],
+  ['Sojern', /sojern/i, 'Travel & Hospitality'],
+  ['Adara', /adara(media)?\.com|tag\.yieldoptimizer/i, 'Travel & Hospitality'],
+  ['Koddi (metasearch)', /koddi/i, 'Travel & Hospitality'],
+  ['TravelClick / iHotelier', /travelclick|ihotelier/i, 'Travel & Hospitality'],
+  ['SiteMinder', /siteminder|thebookingbutton/i, 'Travel & Hospitality'],
+  ['Cloudbeds', /cloudbeds/i, 'Travel & Hospitality'],
+  ['Mews', /mews\.(li|com)\//i, 'Travel & Hospitality'],
+  ['The Hotels Network', /thehotelsnetwork/i, 'Travel & Hospitality'],
+  ['Triptease', /triptease/i, 'Travel & Hospitality'],
+  ['Trivago', /trivago/i, 'Travel & Hospitality'],
+  ['Tripadvisor', /tripadvisor|tacdn\.com/i, 'Travel & Hospitality'],
+  ['Cendyn', /cendyn|nextguest/i, 'Travel & Hospitality'],
+  ['Flip.to (guest referral)', /flip\.to/i, 'Affiliate & Partners'],
+  ['Revinate (hotel CRM)', /revinate/i, 'Email & CRM'],
+  ['Navis (call tracking)', /navisperformance|SendNavis|NavisConvert/i, 'Attribution'],
+  ['Wistia (video hosting)', /wistia/i, 'Site Platform'],
+  ['Marker.io (bug reporting)', /marker\.io/i, 'Site Platform'],
 ];
 
 const CHANNEL_OF = Object.fromEntries(VENDORS.map(([n, , c]) => [n, c]));
@@ -240,7 +261,8 @@ const PARAM_HINTS = [
   ['TikTok', /"pixel_code"|"pixelCode"/],
   ['LinkedIn', /"partnerId"/],
   ['Meta Pixel', /"pixelIds?"/],
-  ['Snapchat', /"pixel_id".*"event_type"|"event_type".*"pixel_id"/],
+  // Snap's template; hotel booking pixels use the same field names alongside hotel_id
+  ['Snapchat', /^(?![\s\S]*"hotel_id")[\s\S]*("pixel_id"[\s\S]*"event_type"|"event_type"[\s\S]*"pixel_id")/],
   ['Reddit', /"id":"[at]2_[a-z0-9]+"|"dataProcessingOptions".*"eventType"|"eventType".*"dataProcessingOptions"/],
 ];
 
@@ -262,6 +284,11 @@ export const AGENCY_SIGNALS = [
   ['Horizon Media', /horizonmedia|horizonnext/i],
   ['Havas', /havas/i],
   ['Accretive Media', /accretivemedia/i],
+  // Hospitality agencies
+  ['Screen Pilot (hotel agency)', /screenpilot/i],
+  ['Milestone (hotel agency)', /milestoneinternet|milestone-cms/i],
+  ['Blue Magnet (hotel agency)', /bluemagnet/i],
+  ['Vizergy (hotel agency)', /vizergy/i],
 ];
 
 // Launch often ships custom code as an escaped string inside _satellite.__registerScript("…"); unescape it first
